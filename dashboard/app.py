@@ -5,8 +5,13 @@ import numpy as np
 import plotly.express as px
 import unicodedata
 import random
+import requests
+
+API_BASE_URL = "http://localhost:8000"
 
 # Inicialización de estado de sesión
+if 'token' not in st.session_state:
+    st.session_state.token = None
 if 'is_admin' not in st.session_state:
     st.session_state.is_admin = False
 if 'show_login' not in st.session_state:
@@ -288,12 +293,20 @@ if st.session_state.show_login:
         password = st.text_input(L['login_pass'], type="password")
         submit = st.form_submit_button(L['login_btn'])
         if submit:
-            if username == "admin" and password == "1234":
-                st.session_state.is_admin = True
-                st.session_state.show_login = False
-                st.rerun()
-            else:
-                st.error(L['login_err'])
+            try:
+                resp = requests.post(
+                    f"{API_BASE_URL}/api/v1/token", 
+                    data={"username": username, "password": password}
+                )
+                if resp.status_code == 200:
+                    st.session_state.token = resp.json()["access_token"]
+                    st.session_state.is_admin = True
+                    st.session_state.show_login = False
+                    st.rerun()
+                else:
+                    st.error(L['login_err'])
+            except Exception as e:
+                st.error(f"Error conectando con la API: {e}")
     st.stop()
 
 # Definición de pestañas
@@ -308,42 +321,43 @@ if st.session_state.is_admin:
 with tab1:
     st.header(f"{L['dash_header']} - {st.session_state.sel_year}")
     try:
-        # Cargar datos base
-        df_real = pd.read_parquet(f"data/processed/deporte_data/anio={st.session_state.sel_year}/hechos_indicadores.parquet")
-        df_display = df_real.rename(columns={'Gasto_Promedio_Hogar_Eur': 'Gasto Promedio Hogar Eur', 'Licencias_Federadas': 'Licencias Federadas'})
+        territory_q = st.session_state.sel_territory
         
-        # Aplicar filtro de Territorio
-        if st.session_state.sel_territory != "Todas las CCAA":
-            df_filtered = df_display[df_display['CCAA'] == st.session_state.sel_territory]
+        # Obtener Métricas de la API
+        metrics_resp = requests.get(f"{API_BASE_URL}/api/v1/dashboard/metrics/{st.session_state.sel_year}", params={"territory": territory_q})
+        if metrics_resp.status_code == 200:
+            metrics = metrics_resp.json()
+            col1, col2, col3 = st.columns(3)
+            col1.metric(L['metric_spending'], f"€ {metrics['avg_spending']:.0f}", None)
+            col2.metric(L['metric_licenses'], f"{metrics['total_licenses']/1e6:.1f}M" if metrics['total_licenses'] > 1e5 else f"{metrics['total_licenses']:,}", None)
+            col3.metric(L['metric_areas'], str(metrics['areas_analyzed']), None)
         else:
-            df_filtered = df_display
+            st.error(L['err_no_data'])
             
-        # Métricas Dinámicas
-        col1, col2, col3 = st.columns(3)
-        if not df_filtered.empty:
-            avg_gasto = df_filtered['Gasto Promedio Hogar Eur'].mean()
-            total_licencias = df_filtered['Licencias Federadas'].sum()
-            num_ccaa = len(df_filtered)
-            
-            col1.metric(L['metric_spending'], f"€ {avg_gasto:.0f}", None)
-            col2.metric(L['metric_licenses'], f"{total_licencias/1e6:.1f}M" if total_licencias > 1e5 else f"{total_licencias:,}", None)
-            col3.metric(L['metric_areas'], str(num_ccaa), None)
-        
-        st.subheader(L['chart_evolution'])
-        fig_scatter = px.scatter(df_filtered, x="Gasto Promedio Hogar Eur", y="Licencias Federadas", hover_name="CCAA", color_discrete_sequence=[accent_color])
-        st.plotly_chart(apply_plotly_style(fig_scatter), use_container_width=True)
-        
-        st.subheader(L['chart_spending_region'])
-        fig_bar = px.bar(df_filtered, x="CCAA", y="Gasto Promedio Hogar Eur", color_discrete_sequence=[accent_color])
-        st.plotly_chart(apply_plotly_style(fig_bar), use_container_width=True)
+        # Obtener Datos de Gráficos de la API
+        charts_resp = requests.get(f"{API_BASE_URL}/api/v1/dashboard/charts/{st.session_state.sel_year}", params={"territory": territory_q})
+        if charts_resp.status_code == 200:
+            df_filtered = pd.DataFrame(charts_resp.json())
+            if not df_filtered.empty:
+                st.subheader(L['chart_evolution'])
+                fig_scatter = px.scatter(df_filtered, x="Gasto Promedio Hogar Eur", y="Licencias Federadas", hover_name="CCAA", color_discrete_sequence=[accent_color])
+                st.plotly_chart(apply_plotly_style(fig_scatter), use_container_width=True)
+                
+                st.subheader(L['chart_spending_region'])
+                fig_bar = px.bar(df_filtered, x="CCAA", y="Gasto Promedio Hogar Eur", color_discrete_sequence=[accent_color])
+                st.plotly_chart(apply_plotly_style(fig_bar), use_container_width=True)
 
-        st.subheader(L['table_indicators'])
-        df_table = df_filtered[['CCAA', 'Gasto Promedio Hogar Eur', 'Licencias Federadas']].copy()
-        df_table.index = range(1, len(df_table) + 1)
-        st.table(df_table)
-        
+                st.subheader(L['table_indicators'])
+                df_table = df_filtered[['CCAA', 'Gasto Promedio Hogar Eur', 'Licencias Federadas']].copy()
+                df_table.index = range(1, len(df_table) + 1)
+                st.table(df_table)
+            else:
+                 st.info(L['err_no_data'])
+        else:
+            st.error("Error al cargar gráficos desde la API.")
+            
     except Exception as e:
-        st.error(L['err_no_data'])
+        st.error(str(e))
 
 with tab2:
     st.header(L['chat_header'])
@@ -360,68 +374,19 @@ with tab2:
             message_placeholder = st.empty()
             full_response = ""
             try:
-                # Cargar y Cachear datos para el asistente
-                @st.cache_data
-                def load_assistant_data():
-                    df = pd.read_parquet("data/processed/deporte_data/anio=2023/hechos_indicadores.parquet")
-                    return df.rename(columns={'Gasto_Promedio_Hogar_Eur': 'Gasto Promedio Hogar Eur', 'Licencias_Federadas': 'Licencias Federadas'})
-                
-                df_rag = load_assistant_data()
-                
-                # Función de normalización
-                def normalize(text):
-                    return "".join(c for c in unicodedata.normalize('NFD', text.lower()) if unicodedata.category(c) != 'Mn')
-                
-                p_low = normalize(prompt)
-                
-                # Lógica dinámica del asistente
-                if any(x in p_low for x in ["gasta mas", "maximo gasto", "most spending", "highest spending", "mas dinero"]):
-                    row = df_rag.loc[df_rag['Gasto Promedio Hogar Eur'].idxmax()]
-                    assistant_response = L['chat_max_spend'].format(region=row['CCAA'], value=row['Gasto Promedio Hogar Eur'])
-                elif any(x in p_low for x in ["gasta menos", "minimo gasto", "least spending", "lowest spending"]):
-                    row = df_rag.loc[df_rag['Gasto Promedio Hogar Eur'].idxmin()]
-                    assistant_response = L['chat_min_spend'].format(region=row['CCAA'], value=row['Gasto Promedio Hogar Eur'])
-                elif any(x in p_low for x in ["mas licencias", "most licenses", "mas federados", "mas socios"]):
-                    row = df_rag.loc[df_rag['Licencias Federadas'].idxmax()]
-                    assistant_response = L['chat_max_lic'].format(region=row['CCAA'], value=int(row['Licencias Federadas']))
-                else:
-                    # Mapeo de nombres comunes a oficiales
-                    aliases = {
-                        "andalucia": "Andalucía",
-                        "aragon": "Aragón",
-                        "asturias": "Asturias, Principado de",
-                        "baleares": "Balears, Illes",
-                        "balears": "Balears, Illes",
-                        "canarias": "Canarias",
-                        "cantabria": "Cantabria",
-                        "leon": "Castilla y León",
-                        "mancha": "Castilla - La Mancha",
-                        "cataluña": "Cataluña",
-                        "catalunya": "Cataluña",
-                        "catalonia": "Cataluña",
-                        "valencia": "Comunitat Valenciana",
-                        "valenciana": "Comunitat Valenciana",
-                        "extremadura": "Extremadura",
-                        "galicia": "Galicia",
-                        "madrid": "Madrid, Comunidad de",
-                        "murcia": "Murcia, Región de",
-                        "navarra": "Navarra, Comunidad Foral de",
-                        "vasco": "País Vasco",
-                        "rioja": "Rioja, La"
-                    }
+                headers = {"Content-Type": "application/json"}
+                if st.session_state.token:
+                    headers["Authorization"] = f"Bearer {st.session_state.token}"
                     
-                    found = False
-                    for key, official_name in aliases.items():
-                        if key in p_low:
-                            row = df_rag[df_rag['CCAA'] == official_name].iloc[0]
-                            assistant_response = L['chat_single_region'].format(region=official_name, gasto=row['Gasto Promedio Hogar Eur'], lic=int(row['Licencias Federadas']))
-                            found = True
-                            break
-                    if not found:
-                        # Sugerencia aleatoria para no ser repetitivo
-                        random_row = df_rag.sample(1).iloc[0]
-                        interesting_fact = L['chat_single_region'].format(region=random_row['CCAA'], gasto=random_row['Gasto Promedio Hogar Eur'], lic=int(random_row['Licencias Federadas']))
-                        assistant_response = f"{L['chat_analyze']} {interesting_fact}"
+                resp = requests.post(
+                    f"{API_BASE_URL}/api/v1/chat",
+                    headers=headers,
+                    json={"prompt": prompt, "lang": st.session_state.lang}
+                )
+                if resp.status_code == 200:
+                    assistant_response = resp.json().get("response", "")
+                else:
+                    assistant_response = "⚠️ Ocurrió un error accediendo a la API del Chat o sesión expirada."
             except Exception as e:
                 assistant_response = f"{L['chat_error_data']} ({str(e)})"
             
@@ -536,3 +501,7 @@ with st.sidebar:
             st.rerun()
     else:
         st.success(L['admin_label'])
+        if st.button("🔒 Salir" if st.session_state.lang == "ES" else "🔒 Logout"):
+            st.session_state.is_admin = False
+            st.session_state.token = None
+            st.rerun()
