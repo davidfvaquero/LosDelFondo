@@ -6,9 +6,9 @@ import plotly.express as px
 import unicodedata
 
 try:
-    from dashboard.chatbot import prepare_assistant_data
+    from dashboard.chatbot import prepare_assistant_data, generate_chat_response
 except ModuleNotFoundError:
-    from chatbot import prepare_assistant_data
+    from chatbot import prepare_assistant_data, generate_chat_response
 
 # Inicialización de estado de sesión
 if 'is_admin' not in st.session_state:
@@ -429,60 +429,9 @@ with tab2:
                 
                 df_rag = load_assistant_data()
                 
-                # Función de normalización
-                def normalize(text):
-                    return "".join(c for c in unicodedata.normalize('NFD', text.lower()) if unicodedata.category(c) != 'Mn')
+                # Generacion dinamica con IA
+                assistant_response = generate_chat_response(prompt, df_rag)
                 
-                p_low = normalize(prompt)
-                
-                # Lógica dinámica del asistente
-                if any(x in p_low for x in ["gasta mas", "maximo gasto", "most spending", "highest spending", "mas dinero"]):
-                    row = df_rag.loc[df_rag['Gasto Promedio Hogar Eur'].idxmax()]
-                    assistant_response = L['chat_max_spend'].format(region=row['CCAA'], value=row['Gasto Promedio Hogar Eur'])
-                elif any(x in p_low for x in ["gasta menos", "minimo gasto", "least spending", "lowest spending"]):
-                    row = df_rag.loc[df_rag['Gasto Promedio Hogar Eur'].idxmin()]
-                    assistant_response = L['chat_min_spend'].format(region=row['CCAA'], value=row['Gasto Promedio Hogar Eur'])
-                elif any(x in p_low for x in ["mas licencias", "most licenses", "mas federados", "mas socios"]):
-                    row = df_rag.loc[df_rag['Licencias Federadas'].idxmax()]
-                    assistant_response = L['chat_max_lic'].format(region=row['CCAA'], value=int(row['Licencias Federadas']))
-                else:
-                    # Mapeo de nombres comunes a oficiales
-                    aliases = {
-                        "andalucia": "Andalucía",
-                        "aragon": "Aragón",
-                        "asturias": "Asturias, Principado de",
-                        "baleares": "Balears, Illes",
-                        "balears": "Balears, Illes",
-                        "canarias": "Canarias",
-                        "cantabria": "Cantabria",
-                        "leon": "Castilla y León",
-                        "mancha": "Castilla - La Mancha",
-                        "cataluña": "Cataluña",
-                        "catalunya": "Cataluña",
-                        "catalonia": "Cataluña",
-                        "valencia": "Comunitat Valenciana",
-                        "valenciana": "Comunitat Valenciana",
-                        "extremadura": "Extremadura",
-                        "galicia": "Galicia",
-                        "madrid": "Madrid, Comunidad de",
-                        "murcia": "Murcia, Región de",
-                        "navarra": "Navarra, Comunidad Foral de",
-                        "vasco": "País Vasco",
-                        "rioja": "Rioja, La"
-                    }
-                    
-                    found = False
-                    for key, official_name in aliases.items():
-                        if key in p_low:
-                            row = df_rag[df_rag['CCAA'] == official_name].iloc[0]
-                            assistant_response = L['chat_single_region'].format(region=official_name, gasto=row['Gasto Promedio Hogar Eur'], lic=int(row['Licencias Federadas']))
-                            found = True
-                            break
-                    if not found:
-                        # Sugerencia aleatoria para no ser repetitivo
-                        random_row = df_rag.sample(1).iloc[0]
-                        interesting_fact = L['chat_single_region'].format(region=random_row['CCAA'], gasto=random_row['Gasto Promedio Hogar Eur'], lic=int(random_row['Licencias Federadas']))
-                        assistant_response = f"{L['chat_analyze']} {interesting_fact}"
             except Exception as e:
                 assistant_response = f"{L['chat_error_data']} ({str(e)})"
             
