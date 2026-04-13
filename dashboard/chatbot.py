@@ -5,6 +5,8 @@ from __future__ import annotations
 import unicodedata
 
 import pandas as pd
+import streamlit as st
+from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
 
 ALIASES = {
     "andalucia": "Andalucía",
@@ -114,3 +116,79 @@ def generate_chat_response(prompt: str, df: pd.DataFrame, labels: dict[str, str]
         lic=int(fallback_row["Licencias Federadas"]),
     )
     return f"{labels['chat_analyze']} {interesting_fact}"
+
+# AI Models Integration
+
+@st.cache_resource(show_spinner="Loading NLP models...")
+def load_models():
+    """Load the toxicity classifier and LLM pipeline."""
+    # 1. Toxicity Classifier
+    toxic_tokenizer = AutoTokenizer.from_pretrained("unitary/multilingual-toxic-xlm-roberta", use_fast=False)
+    toxic_clf = pipeline(
+        "text-classification",
+        model="unitary/multilingual-toxic-xlm-roberta",
+        tokenizer=toxic_tokenizer,
+        top_k=None
+    )
+
+    # 2. Causual LLM (Qwen2.5)
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    model = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen2.5-0.5B-Instruct",
+        device_map="auto"
+    )
+    llm_pipeline = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=400,
+        max_length=None,
+        temperature=0.7,
+        top_p=0.9
+    )
+
+    return toxic_clf, llm_pipeline
+
+def check_toxicity(prompt: str, classifier_pipeline) -> tuple[bool, float]:
+    """Return True if prompt is toxic, along with the toxicity score."""
+    try:
+        results = classifier_pipeline(prompt)[0]
+        # Get the 'toxic' label score
+        for res in results:
+            if res['label'] == 'toxic':
+                return (res['score'] > 0.5), res['score']
+        return False, 0.0
+    except Exception as e:
+        print(f"Toxicity check error: {e}")
+        return False, 0.0
+
+def build_dataset_context(df: pd.DataFrame) -> str:
+    """Create a string representation of the Dataframe for the LLM."""
+    if df.empty:
+        return "No data available."
+    
+    # Just serialize the top data rows or agg
+    context = "Dataset Summary (avg spend in EUR and federated licenses by region):\n"
+    for _, row in df.iterrows():
+        context += f"- {row['CCAA']}: Avg Spend {row['Gasto Promedio Hogar Eur']} EUR, {int(row['Licencias Federadas'])} licenses.\n"
+    return context
+
+def generate_llm_response(prompt: str, df: pd.DataFrame, llm_pipeline, lang: str) -> str:
+    """Generate response using Qwen model with the dataframe as context."""
+    context = build_dataset_context(df)
+    
+    sys_msg = (
+        "You are an AI assistant for DEPORTEData, an analytics dashboard about sports spending and licenses in Spain. "
+        "Answer the user's question concisely based ONLY on the provided dataset context. If the data does not contain the answer, say so. "
+        f"Respond in {'Spanish' if lang == 'ES' else 'English'}."
+    )
+    
+    messages = [
+        {"role": "system", "content": sys_msg + "\n\nContext:\n" + context},
+        {"role": "user", "content": prompt}
+    ]
+    
+    output = llm_pipeline(messages)
+    generated_text = output[0]["generated_text"][-1]["content"]
+    return generated_text.strip()
+
