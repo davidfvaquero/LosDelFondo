@@ -6,9 +6,9 @@ import plotly.express as px
 
 
 try:
-    from dashboard.chatbot import prepare_assistant_data, load_models, check_toxicity, generate_llm_response
-except ModuleNotFoundError:
-    from chatbot import prepare_assistant_data, load_models, check_toxicity, generate_llm_response
+    from dashboard.chatbot import prepare_assistant_data, generate_chat_response
+except ImportError:
+    from chatbot import prepare_assistant_data, generate_chat_response
 
 # Inicialización de estado de sesión
 if 'is_admin' not in st.session_state:
@@ -443,17 +443,9 @@ with tab2:
                     return prepare_assistant_data(df)
                 
                 df_rag = load_assistant_data()
-                toxic_clf, llm_pipeline = load_models()
                 
-                # Revisar toxicidad primero
-                is_toxic, score = check_toxicity(prompt, toxic_clf)
+                assistant_response = generate_chat_response(prompt, df_rag, L)
                 
-                if is_toxic:
-                    # Mensaje de bloqueo en el idioma seleccionado
-                    assistant_response = "⚠️ El mensaje ha sido bloqueado por nuestra política de seguridad debido a lenguaje tóxico o inapropiado." if st.session_state.lang == "ES" else "⚠️ The message has been blocked by our security policy due to toxic or inappropriate language."
-                else:
-                    # Generar respuesta usando el LLM
-                    assistant_response = generate_llm_response(prompt, df_rag, llm_pipeline, st.session_state.lang)
             except Exception as e:
                 assistant_response = f"{L['chat_error_data']} ({str(e)})"
             
