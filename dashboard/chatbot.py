@@ -3,6 +3,8 @@
 from __future__ import annotations
 import unicodedata
 import pandas as pd
+import streamlit as st
+from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
 
 # Diccionario de alias para normalizar nombres de CCAA
 ALIASES = {
