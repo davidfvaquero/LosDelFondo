@@ -6,15 +6,22 @@ import numpy as np
 import os
 import sys
 
-# Import test_chatbot module to reuse its normalize, aliases, and logic dependencies
+# Import components from the new structural location
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-import test_chatbot
+from dashboard.chatbot import (
+    load_models, check_toxicity, generate_chat_response, 
+    generate_llm_response, prepare_assistant_data
+)
 
 app = FastAPI(
     title="DEPORTEData API",
     description="API for accessing sports data statistics, analytics, and AI assistant",
     version="1.1.0"
 )
+
+# --- AI Models Globals ---
+toxic_clf = None
+llm_pipeline = None
 
 # --- Authentication Configuration ---
 USERS_DB = {
@@ -62,7 +69,8 @@ LANGUAGES = {
         'chat_max_lic': "🏆 {region} lidera en licencias con {value:,}.",
         'chat_single_region': "📍 En {region}: Gasto de {gasto} € y {lic} licencias.",
         'chat_analyze': "🧠 He analizado los datos actuales. ¿Deseas algún detalle específico?",
-        'chat_error_data': "⚠️ No hay datos disponibles para el análisis."
+        'chat_error_data': "⚠️ No hay datos disponibles para el análisis.",
+        'chat_toxic_error': "⚠️ Mensaje detectado como inapropiado. Por favor, realiza consultas respetuosas."
     },
     'EN': {
         'chat_max_spend': "🔍 The region with the highest spending is {region} with {value} €.",
@@ -70,7 +78,8 @@ LANGUAGES = {
         'chat_max_lic': "🏆 {region} leads in licenses with {value:,}.",
         'chat_single_region': "📍 In {region}: Spending of {gasto} € and {lic} licenses.",
         'chat_analyze': "🧠 I have analyzed the current data. Do you need any specific details?",
-        'chat_error_data': "⚠️ No data available for analysis."
+        'chat_error_data': "⚠️ No data available for analysis.",
+        'chat_toxic_error': "⚠️ Message detected as inappropriate. Please make respectful queries."
     }
 }
 
@@ -138,45 +147,34 @@ def get_dashboard_charts(year: int, territory: str = "Todas las CCAA"):
 def ai_chat_assistant(request: ChatRequest):
     """
     AI Chat endpoint handling specific queries about sports data.
-    Available to all users. Retains dependency on imported test_chatbot logic.
+    Accommodates the latest refactors in dashboard/chatbot.py.
     """
+    global toxic_clf, llm_pipeline
+    
     lang = request.lang if request.lang in LANGUAGES else "ES"
     L = LANGUAGES[lang]
     
     try:
-        # Utilize the dataframe loaded by test_chatbot if available, else load manually map
-        try:
-            df_rag = test_chatbot.df
-        except AttributeError:
-            file_path = os.path.join(DATA_DIR, "anio=2023", "hechos_indicadores.parquet")
-            df_rag = pd.read_parquet(file_path)
-            df_rag = df_rag.rename(columns={'Gasto_Promedio_Hogar_Eur': 'Gasto Promedio Hogar Eur', 'Licencias_Federadas': 'Licencias Federadas'})
+        # 1. Load Data
+        file_path = os.path.join(DATA_DIR, "anio=2023", "hechos_indicadores.parquet")
+        if not os.path.exists(file_path):
+            return ChatResponse(response=L["chat_error_data"])
         
-        # Use normalizer and aliases directly from test_chatbot
-        p_low = test_chatbot.normalize(request.prompt)
+        df = pd.read_parquet(file_path)
+        df_rag = prepare_assistant_data(df)
         
-        if any(x in p_low for x in ["gasta mas", "maximo gasto", "most spending", "highest spending", "mas dinero"]):
-            row = df_rag.loc[df_rag['Gasto Promedio Hogar Eur'].idxmax()]
-            resp = L['chat_max_spend'].format(region=row['CCAA'], value=row['Gasto Promedio Hogar Eur'])
-        elif any(x in p_low for x in ["gasta menos", "minimo gasto", "least spending", "lowest spending"]):
-            row = df_rag.loc[df_rag['Gasto Promedio Hogar Eur'].idxmin()]
-            resp = L['chat_min_spend'].format(region=row['CCAA'], value=row['Gasto Promedio Hogar Eur'])
-        elif any(x in p_low for x in ["mas licencias", "most licenses", "mas federados", "mas socios"]):
-            row = df_rag.loc[df_rag['Licencias Federadas'].idxmax()]
-            resp = L['chat_max_lic'].format(region=row['CCAA'], value=int(row['Licencias Federadas']))
-        else:
-            found = False
-            for key, official_name in test_chatbot.aliases.items():
-                if key in p_low:
-                    row = df_rag[df_rag['CCAA'] == official_name].iloc[0]
-                    resp = L['chat_single_region'].format(region=official_name, gasto=row['Gasto Promedio Hogar Eur'], lic=int(row['Licencias Federadas']))
-                    found = True
-                    break
-            if not found:
-                random_row = df_rag.sample(1).iloc[0]
-                interesting_fact = L['chat_single_region'].format(region=random_row['CCAA'], gasto=random_row['Gasto Promedio Hogar Eur'], lic=int(random_row['Licencias Federadas']))
-                resp = f"{L['chat_analyze']} {interesting_fact}"
-                
+        # 2. Lazy load HF models (toxicity & LLM)
+        if toxic_clf is None or llm_pipeline is None:
+            toxic_clf, llm_pipeline = load_models()
+            
+        # 3. Check Toxicity
+        is_toxic, _ = check_toxicity(request.prompt, toxic_clf)
+        if is_toxic:
+            return ChatResponse(response=L["chat_toxic_error"])
+            
+        # 4. Generate dynamic AI response using the LLM for all queries
+        resp = generate_llm_response(request.prompt, df_rag, llm_pipeline, lang)
+            
         return ChatResponse(response=resp)
         
     except Exception as e:

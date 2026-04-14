@@ -10,6 +10,10 @@ try:
 except ImportError:
     from chatbot import prepare_assistant_data, generate_chat_response
 
+import requests
+
+API_BASE_URL = "http://localhost:8000"
+
 # Inicialización de estado de sesión
 if 'token' not in st.session_state:
     st.session_state.token = None
@@ -385,45 +389,56 @@ if st.session_state.is_admin:
 
 with tab1:
     st.header(f"{L['dash_header']} - {st.session_state.sel_year}")
-    try:
-        # Cargar datos base
-        df_real = pd.read_parquet(f"data/processed/deporte_data/anio={st.session_state.sel_year}/hechos_indicadores.parquet")
-        df_display = df_real.rename(columns={'Gasto_Promedio_Hogar_Eur': L['col_gasto'], 'Licencias_Federadas': L['col_lic'], 'CCAA': L['col_ccaa']})
+    
+    @st.cache_data(show_spinner=False)
+    def fetch_metrics(year, territory):
+        resp = requests.get(f"{API_BASE_URL}/api/v1/dashboard/metrics/{year}", params={"territory": territory})
+        if resp.status_code == 200:
+            return resp.json()
+        return None
         
-        # Aplicar filtro de Territorio
-        if st.session_state.sel_territory != "Todas las CCAA":
-            # Si select_territory es el real, en el df original es en español.
-            # Filtrar usando el df original si es necesario, o buscar por la CCAA en la DB
-            df_filtered = df_display[df_real['CCAA'] == st.session_state.sel_territory]
+    @st.cache_data(show_spinner=False)
+    def fetch_charts(year, territory):
+        resp = requests.get(f"{API_BASE_URL}/api/v1/dashboard/charts/{year}", params={"territory": territory})
+        if resp.status_code == 200:
+            return pd.DataFrame(resp.json())
+        return None
+
+    try:
+        territory_q = st.session_state.sel_territory
+        
+        # 1. Obtener Métricas Cacheadas
+        metrics = fetch_metrics(st.session_state.sel_year, territory_q)
+        if metrics is not None:
+            col1, col2, col3 = st.columns(3)
+            col1.metric(L['metric_spending'], f"€ {metrics['avg_spending']:.0f}", None)
+            col2.metric(L['metric_licenses'], f"{metrics['total_licenses']/1e6:.1f}M" if metrics['total_licenses'] > 1e5 else f"{metrics['total_licenses']:,}", None)
+            col3.metric(L['metric_areas'], str(metrics['areas_analyzed']), None)
         else:
             st.error(L['err_no_data'])
             
-        # Métricas Dinámicas
-        col1, col2, col3 = st.columns(3)
-        if not df_filtered.empty:
-            avg_gasto = df_filtered[L['col_gasto']].mean()
-            total_licencias = df_filtered[L['col_lic']].sum()
-            num_ccaa = len(df_filtered)
+        # 2. Obtener Datos de Gráficos Cacheados
+        df_filtered = fetch_charts(st.session_state.sel_year, territory_q)
+        if df_filtered is not None and not df_filtered.empty:
+            st.subheader(L['chart_evolution'])
+            fig_scatter = px.scatter(df_filtered, x=L['col_gasto'], y=L['col_lic'], hover_name=L['col_ccaa'], color_discrete_sequence=[accent_color])
+            st.plotly_chart(apply_plotly_style(fig_scatter), width="stretch")
             
-            col1.metric(L['metric_spending'], f"€ {avg_gasto:.0f}", None)
-            col2.metric(L['metric_licenses'], f"{total_licencias/1e6:.1f}M" if total_licencias > 1e5 else f"{total_licencias:,}", None)
-            col3.metric(L['metric_areas'], str(num_ccaa), None)
-        
-        st.subheader(L['chart_evolution'])
-        fig_scatter = px.scatter(df_filtered, x=L['col_gasto'], y=L['col_lic'], hover_name=L['col_ccaa'], color_discrete_sequence=[accent_color])
-        st.plotly_chart(apply_plotly_style(fig_scatter), use_container_width=True)
-        
-        st.subheader(L['chart_spending_region'])
-        fig_bar = px.bar(df_filtered, x=L['col_ccaa'], y=L['col_gasto'], color_discrete_sequence=[accent_color])
-        st.plotly_chart(apply_plotly_style(fig_bar), use_container_width=True)
+            st.subheader(L['chart_spending_region'])
+            fig_bar = px.bar(df_filtered, x=L['col_ccaa'], y=L['col_gasto'], color_discrete_sequence=[accent_color])
+            st.plotly_chart(apply_plotly_style(fig_bar), width="stretch")
 
-        st.subheader(L['table_indicators'])
-        df_table = df_filtered[[L['col_ccaa'], L['col_gasto'], L['col_lic']]].copy()
-        df_table.index = range(1, len(df_table) + 1)
-        st.table(df_table)
-        
-    except Exception:
-        st.error(L['err_no_data'])
+            st.subheader(L['table_indicators'])
+            df_table = df_filtered[[L['col_ccaa'], L['col_gasto'], L['col_lic']]].copy()
+            df_table.index = range(1, len(df_table) + 1)
+            st.table(df_table)
+        elif df_filtered is not None and df_filtered.empty:
+            st.info(L['err_no_data'])
+        else:
+            st.error("Error al cargar gráficos desde la API.")
+            
+    except Exception as e:
+        st.error(str(e))
 
 with tab2:
     st.header(L['chat_header'])
@@ -446,16 +461,19 @@ with tab2:
                 message_placeholder = st.empty()
             full_response = ""
             try:
-                # Cargar y Cachear datos para el asistente
-                @st.cache_data
-                def load_assistant_data():
-                    df = pd.read_parquet("data/processed/deporte_data/anio=2023/hechos_indicadores.parquet")
-                    return prepare_assistant_data(df)
-                
-                df_rag = load_assistant_data()
-                
-                assistant_response = generate_chat_response(prompt, df_rag, L)
-                
+                headers = {"Content-Type": "application/json"}
+                if st.session_state.token:
+                    headers["Authorization"] = f"Bearer {st.session_state.token}"
+                    
+                resp = requests.post(
+                    f"{API_BASE_URL}/api/v1/chat",
+                    headers=headers,
+                    json={"prompt": prompt, "lang": st.session_state.lang}
+                )
+                if resp.status_code == 200:
+                    assistant_response = resp.json().get("response", "")
+                else:
+                    assistant_response = "⚠️ Ocurrió un error accediendo a la API del Chat."
             except Exception as e:
                 assistant_response = f"{L['chat_error_data']} ({str(e)})"
             
@@ -474,11 +492,11 @@ if st.session_state.is_admin:
         with col_u1:
             st.metric(L['admin_active'], "142", None)
             fig_usage = px.line(pd.DataFrame(np.random.randn(20, 2), columns=[L['chart_q'], L['chart_v']]), color_discrete_sequence=[accent_color, "#FF4B4B"])
-            st.plotly_chart(apply_plotly_style(fig_usage), use_container_width=True)
+            st.plotly_chart(apply_plotly_style(fig_usage), width="stretch")
         with col_u2:
             st.metric(L['admin_queries'], "2,840", None)
             fig_total = px.bar(np.random.randint(10, 100, size=(7, 1)), color_discrete_sequence=[accent_color])
-            st.plotly_chart(apply_plotly_style(fig_total), use_container_width=True)
+            st.plotly_chart(apply_plotly_style(fig_total), width="stretch")
         
         st.divider()
         
@@ -502,7 +520,7 @@ if st.session_state.is_admin:
             st.markdown(f"**{L['admin_system_load']}**")
             telemetry_data = pd.DataFrame(np.random.randn(20, 1), columns=[L['chart_l']])
             fig_telemetry = px.area(telemetry_data, color_discrete_sequence=[accent_color])
-            st.plotly_chart(apply_plotly_style(fig_telemetry), use_container_width=True)
+            st.plotly_chart(apply_plotly_style(fig_telemetry), width="stretch")
 
 # Sidebar y personalización
 with st.sidebar:
