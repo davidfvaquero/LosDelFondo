@@ -7,12 +7,12 @@ import plotly.express as px
 
 try:
     from dashboard.chatbot import (
-        prepare_assistant_data, generate_chat_response,
+        prepare_assistant_data,
         check_toxicity, load_models, generate_llm_response,
     )
 except ImportError:
     from chatbot import (
-        prepare_assistant_data, generate_chat_response,
+        prepare_assistant_data,
         check_toxicity, load_models, generate_llm_response,
     )
 
