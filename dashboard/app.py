@@ -3,11 +3,12 @@ import time
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import unicodedata
-import random
-import requests
 
-API_BASE_URL = "http://localhost:8000"
+
+try:
+    from dashboard.chatbot import prepare_assistant_data, generate_chat_response
+except ImportError:
+    from chatbot import prepare_assistant_data, generate_chat_response
 
 # Inicialización de estado de sesión
 if 'token' not in st.session_state:
@@ -24,6 +25,8 @@ if 'sel_year' not in st.session_state:
     st.session_state.sel_year = '2023'
 if 'sel_territory' not in st.session_state:
     st.session_state.sel_territory = 'Todas las CCAA'
+if 'sel_territory_input' not in st.session_state:
+    st.session_state.sel_territory_input = 'Todas las CCAA'
 
 # Diccionario de Traducciones
 LANGUAGES = {
@@ -75,7 +78,13 @@ LANGUAGES = {
         'admin_telemetry': "📡 Telemetría de Sistema",
         'admin_cpu': "Carga CPU",
         'admin_ram': "Uso RAM",
-        'admin_system_load': "Carga de Sistema (20 min)"
+        'admin_system_load': "Carga de Sistema (20 min)",
+        'col_gasto': "Gasto Promedio Hogar Eur",
+        'col_lic': "Licencias Federadas",
+        'col_ccaa': "CCAA",
+        'chart_q': "Consultas IA",
+        'chart_v': "Visitas Dashboard",
+        'chart_l': "Carga"
     },
     'EN': {
         'page_title': "DEPORTEData | Challenge A",
@@ -125,15 +134,23 @@ LANGUAGES = {
         'admin_telemetry': "📡 System Telemetry",
         'admin_cpu': "CPU Load",
         'admin_ram': "RAM Usage",
-        'admin_system_load': "System Load (20 min)"
+        'admin_system_load': "System Load (20 min)",
+        'col_gasto': "Avg Household Spending Eur",
+        'col_lic': "Federated Licenses",
+        'col_ccaa': "Region",
+        'chart_q': "AI Queries",
+        'chart_v': "Dashboard Visits",
+        'chart_l': "Load"
     }
 }
 L = LANGUAGES[st.session_state.lang]
 
 # Configuración de la página
+icon_path = "dashboard/icon_white.png" if st.session_state.theme == 'Oscuro' else "dashboard/icon.png"
+
 st.set_page_config(
     page_title=L['page_title'],
-    page_icon="🏅",
+    page_icon=icon_path,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -213,9 +230,37 @@ st.markdown(f"""
         border-radius: 10px;
         margin-bottom: 10px;
     }}
+    [data-testid="stTextInputRootElement"] {{
+        background-color: {"#FFFFFF" if st.session_state.theme == "Claro" else "#1A1C23"} !important;
+        border: 1px solid {table_border} !important;
+        border-radius: 8px !important;
+    }}
+    [data-testid="stTextInputRootElement"] > div {{
+        background-color: {"#FFFFFF" if st.session_state.theme == "Claro" else "#1A1C23"} !important;
+    }}
+    [data-testid="stTextInputRootElement"] input {{
+        background-color: transparent !important;
+        color: {text_color} !important;
+    }}
+    [data-testid="stTextInputRootElement"] input::placeholder {{
+        color: {text_color} !important;
+        opacity: 0.6 !important;
+    }}
+    [data-testid="stTextInputRootElement"] svg {{
+        fill: {text_color} !important;
+    }}
 
     /* Refinamiento Chat Input (Chatbot) */
-    [data-testid="stChatInput"], [data-testid="stChatInput"] div {{
+    [data-testid="stChatInput"] {{
+        position: sticky !important;
+        bottom: 0 !important;
+        padding-bottom: 2rem !important;
+        padding-top: 1rem !important;
+        background-color: {bg_color} !important;
+        z-index: 99 !important;
+        border: none !important;
+    }}
+    [data-testid="stChatInput"] div {{
         background-color: transparent !important;
         border: none !important;
     }}
@@ -242,17 +287,37 @@ st.markdown(f"""
         border: 1px solid {table_border} !important;
     }}
     
-    /* Corregir dropdowns en modo claro */
-    div[data-baseweb="popover"] ul {{
+    /* Corregir a fondo Menu de Configuración (3 puntos) en modo claro */
+    div[data-baseweb="popover"] ul, 
+    div[data-baseweb="popover"] li, 
+    div[data-baseweb="popover"] div, 
+    div[data-testid="stPopoverBody"], 
+    ul[data-testid="main-menu-list"], 
+    ul[data-testid="main-menu-list"] li,
+    ul[data-testid="main-menu-list"] div {{
         background-color: {"#FFFFFF" if st.session_state.theme == "Claro" else "#1A1C23"} !important;
-    }}
-    div[data-baseweb="popover"] li {{
         color: {text_color} !important;
+    }}
+    
+    div[data-baseweb="popover"] span, 
+    ul[data-testid="main-menu-list"] span,
+    div[data-baseweb="popover"] p {{
+        color: {text_color} !important;
+    }}
+    
+    /* Efecto hover en el menu */
+    div[data-baseweb="popover"] li:hover, 
+    ul[data-testid="main-menu-list"] li:hover {{
+        background-color: {"#F0F2F6" if st.session_state.theme == "Claro" else "#262730"} !important;
     }}
     div[data-baseweb="select"] ul {{
         background-color: {"#FFFFFF" if st.session_state.theme == "Claro" else "#1A1C23"} !important;
     }}
     div[data-baseweb="select"] li {{
+        color: {text_color} !important;
+    }}
+    div[data-baseweb="radio"] label,
+    div[data-baseweb="radio"] div {{
         color: {text_color} !important;
     }}
     div.stButton > button, [data-testid="stFormSubmitButton"] > button, div.stButton > button p, [data-testid="stFormSubmitButton"] > button p {{
@@ -321,72 +386,76 @@ if st.session_state.is_admin:
 with tab1:
     st.header(f"{L['dash_header']} - {st.session_state.sel_year}")
     try:
-        territory_q = st.session_state.sel_territory
+        # Cargar datos base
+        df_real = pd.read_parquet(f"data/processed/deporte_data/anio={st.session_state.sel_year}/hechos_indicadores.parquet")
+        df_display = df_real.rename(columns={'Gasto_Promedio_Hogar_Eur': L['col_gasto'], 'Licencias_Federadas': L['col_lic'], 'CCAA': L['col_ccaa']})
         
-        # Obtener Métricas de la API
-        metrics_resp = requests.get(f"{API_BASE_URL}/api/v1/dashboard/metrics/{st.session_state.sel_year}", params={"territory": territory_q})
-        if metrics_resp.status_code == 200:
-            metrics = metrics_resp.json()
-            col1, col2, col3 = st.columns(3)
-            col1.metric(L['metric_spending'], f"€ {metrics['avg_spending']:.0f}", None)
-            col2.metric(L['metric_licenses'], f"{metrics['total_licenses']/1e6:.1f}M" if metrics['total_licenses'] > 1e5 else f"{metrics['total_licenses']:,}", None)
-            col3.metric(L['metric_areas'], str(metrics['areas_analyzed']), None)
+        # Aplicar filtro de Territorio
+        if st.session_state.sel_territory != "Todas las CCAA":
+            # Si select_territory es el real, en el df original es en español.
+            # Filtrar usando el df original si es necesario, o buscar por la CCAA en la DB
+            df_filtered = df_display[df_real['CCAA'] == st.session_state.sel_territory]
         else:
             st.error(L['err_no_data'])
             
-        # Obtener Datos de Gráficos de la API
-        charts_resp = requests.get(f"{API_BASE_URL}/api/v1/dashboard/charts/{st.session_state.sel_year}", params={"territory": territory_q})
-        if charts_resp.status_code == 200:
-            df_filtered = pd.DataFrame(charts_resp.json())
-            if not df_filtered.empty:
-                st.subheader(L['chart_evolution'])
-                fig_scatter = px.scatter(df_filtered, x="Gasto Promedio Hogar Eur", y="Licencias Federadas", hover_name="CCAA", color_discrete_sequence=[accent_color])
-                st.plotly_chart(apply_plotly_style(fig_scatter), use_container_width=True)
-                
-                st.subheader(L['chart_spending_region'])
-                fig_bar = px.bar(df_filtered, x="CCAA", y="Gasto Promedio Hogar Eur", color_discrete_sequence=[accent_color])
-                st.plotly_chart(apply_plotly_style(fig_bar), use_container_width=True)
-
-                st.subheader(L['table_indicators'])
-                df_table = df_filtered[['CCAA', 'Gasto Promedio Hogar Eur', 'Licencias Federadas']].copy()
-                df_table.index = range(1, len(df_table) + 1)
-                st.table(df_table)
-            else:
-                 st.info(L['err_no_data'])
-        else:
-            st.error("Error al cargar gráficos desde la API.")
+        # Métricas Dinámicas
+        col1, col2, col3 = st.columns(3)
+        if not df_filtered.empty:
+            avg_gasto = df_filtered[L['col_gasto']].mean()
+            total_licencias = df_filtered[L['col_lic']].sum()
+            num_ccaa = len(df_filtered)
             
-    except Exception as e:
-        st.error(str(e))
+            col1.metric(L['metric_spending'], f"€ {avg_gasto:.0f}", None)
+            col2.metric(L['metric_licenses'], f"{total_licencias/1e6:.1f}M" if total_licencias > 1e5 else f"{total_licencias:,}", None)
+            col3.metric(L['metric_areas'], str(num_ccaa), None)
+        
+        st.subheader(L['chart_evolution'])
+        fig_scatter = px.scatter(df_filtered, x=L['col_gasto'], y=L['col_lic'], hover_name=L['col_ccaa'], color_discrete_sequence=[accent_color])
+        st.plotly_chart(apply_plotly_style(fig_scatter), use_container_width=True)
+        
+        st.subheader(L['chart_spending_region'])
+        fig_bar = px.bar(df_filtered, x=L['col_ccaa'], y=L['col_gasto'], color_discrete_sequence=[accent_color])
+        st.plotly_chart(apply_plotly_style(fig_bar), use_container_width=True)
+
+        st.subheader(L['table_indicators'])
+        df_table = df_filtered[[L['col_ccaa'], L['col_gasto'], L['col_lic']]].copy()
+        df_table.index = range(1, len(df_table) + 1)
+        st.table(df_table)
+        
+    except Exception:
+        st.error(L['err_no_data'])
 
 with tab2:
     st.header(L['chat_header'])
     if "messages" not in st.session_state:
         st.session_state.messages = [{"role": "assistant", "content": L['chat_hi']}]
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        
+    msg_container = st.container()
+    
+    with msg_container:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                
     if prompt := st.chat_input(L['chat_input']):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
+        with msg_container:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
             full_response = ""
             try:
-                headers = {"Content-Type": "application/json"}
-                if st.session_state.token:
-                    headers["Authorization"] = f"Bearer {st.session_state.token}"
-                    
-                resp = requests.post(
-                    f"{API_BASE_URL}/api/v1/chat",
-                    headers=headers,
-                    json={"prompt": prompt, "lang": st.session_state.lang}
-                )
-                if resp.status_code == 200:
-                    assistant_response = resp.json().get("response", "")
-                else:
-                    assistant_response = "⚠️ Ocurrió un error accediendo a la API del Chat o sesión expirada."
+                # Cargar y Cachear datos para el asistente
+                @st.cache_data
+                def load_assistant_data():
+                    df = pd.read_parquet("data/processed/deporte_data/anio=2023/hechos_indicadores.parquet")
+                    return prepare_assistant_data(df)
+                
+                df_rag = load_assistant_data()
+                
+                assistant_response = generate_chat_response(prompt, df_rag, L)
+                
             except Exception as e:
                 assistant_response = f"{L['chat_error_data']} ({str(e)})"
             
@@ -404,7 +473,7 @@ if st.session_state.is_admin:
         col_u1, col_u2 = st.columns(2)
         with col_u1:
             st.metric(L['admin_active'], "142", None)
-            fig_usage = px.line(pd.DataFrame(np.random.randn(20, 2), columns=['Queries', 'Visits']), color_discrete_sequence=[accent_color, "#FF4B4B"])
+            fig_usage = px.line(pd.DataFrame(np.random.randn(20, 2), columns=[L['chart_q'], L['chart_v']]), color_discrete_sequence=[accent_color, "#FF4B4B"])
             st.plotly_chart(apply_plotly_style(fig_usage), use_container_width=True)
         with col_u2:
             st.metric(L['admin_queries'], "2,840", None)
@@ -431,13 +500,13 @@ if st.session_state.is_admin:
             col_t1.metric(L['admin_cpu'], "24%", "2%")
             col_t2.metric(L['admin_ram'], "1.2 GB", "0.1 GB")
             st.markdown(f"**{L['admin_system_load']}**")
-            telemetry_data = pd.DataFrame(np.random.randn(20, 1), columns=['Load'])
+            telemetry_data = pd.DataFrame(np.random.randn(20, 1), columns=[L['chart_l']])
             fig_telemetry = px.area(telemetry_data, color_discrete_sequence=[accent_color])
             st.plotly_chart(apply_plotly_style(fig_telemetry), use_container_width=True)
 
 # Sidebar y personalización
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/5144/5144083.png", width=100)
+    st.image(icon_path, width=100)
     st.markdown("## DEPORTEData")
     st.divider()
     
@@ -452,6 +521,8 @@ with st.sidebar:
     )
     if lang != st.session_state.lang:
         st.session_state.lang = lang
+        # Refrescar saludo del chatbot al cambiar idioma
+        st.session_state.messages = [{"role": "assistant", "content": LANGUAGES[lang]['chat_hi']}]
         st.rerun()
 
     theme = st.radio(L['sidebar_theme'], ["Oscuro", "Claro"] if st.session_state.lang == "ES" else ["Dark", "Light"], index=0 if st.session_state.theme in ["Oscuro", "Dark"] else 1, horizontal=True)
@@ -501,7 +572,4 @@ with st.sidebar:
             st.rerun()
     else:
         st.success(L['admin_label'])
-        if st.button("🔒 Salir" if st.session_state.lang == "ES" else "🔒 Logout"):
-            st.session_state.is_admin = False
-            st.session_state.token = None
-            st.rerun()
+

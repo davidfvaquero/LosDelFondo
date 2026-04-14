@@ -9,6 +9,7 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -18,16 +19,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint with Ruff
+        run: ruff check .
 
       - name: Validate Python files compile
         run: |
+          python -m py_compile dashboard/chatbot.py
           python -m py_compile dashboard/app.py
           python -m py_compile scripts/process_data.py
+
+      - name: Run tests
+        run: pytest
 
       - name: Regenerate processed dataset
         run: python scripts/process_data.py

@@ -13,9 +13,23 @@ Se ha anadido el workflow de GitHub Actions en [`.github/workflows/ci.yml`](/Los
 Checks que ejecuta:
 
 - instala dependencias
+- ejecuta lint con Ruff
 - valida que los archivos Python compilan
+- ejecuta tests con pytest
 - regenera el dataset procesado
 - comprueba que el Parquet existe y tiene la estructura esperada
+
+## CD hacia Render
+
+Se ha anadido el workflow [`.github/workflows/render-deploy.yml`](/LosDelFondo/.github/workflows/render-deploy.yml) para disparar el despliegue en Render cuando la CI termina correctamente sobre `main`.
+
+Para activarlo en GitHub:
+
+1. Crea en Render un `Deploy Hook` para el servicio.
+2. Guarda la URL en el secret del repositorio `RENDER_DEPLOY_HOOK_URL`.
+3. Protege la rama `main` y exige que la CI pase antes de hacer merge.
+
+Sin ese secret, el workflow de deploy fallara de forma explicita para que no pase desapercibido.
 
 
 ## Como lanzar la web en local
@@ -36,6 +50,14 @@ python -m venv .venv
 
 ```bash
 pip install -r requirements.txt
+```
+
+Si quieres ejecutar la misma calidad que CI en local:
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+pytest
 ```
 
 4. Genera o actualiza los datos procesados:
