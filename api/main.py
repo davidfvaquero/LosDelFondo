@@ -9,8 +9,7 @@ import sys
 # Import components from the new structural location
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from dashboard.chatbot import (
-    load_models, check_toxicity, generate_chat_response, 
-    generate_llm_response, prepare_assistant_data
+    load_models, check_toxicity, generate_llm_response, prepare_assistant_data
 )
 
 app = FastAPI(
@@ -64,20 +63,10 @@ class ChatResponse(BaseModel):
 # --- Translation Dictionary (for AI) ---
 LANGUAGES = {
     'ES': {
-        'chat_max_spend': "🔍 La CCAA que más gasta es {region} con {value} €.",
-        'chat_min_spend': "🔍 La CCAA que menos gasta es {region} con {value} €.",
-        'chat_max_lic': "🏆 {region} lidera en licencias con {value:,}.",
-        'chat_single_region': "📍 En {region}: Gasto de {gasto} € y {lic} licencias.",
-        'chat_analyze': "🧠 He analizado los datos actuales. ¿Deseas algún detalle específico?",
         'chat_error_data': "⚠️ No hay datos disponibles para el análisis.",
         'chat_toxic_error': "⚠️ Mensaje detectado como inapropiado. Por favor, realiza consultas respetuosas."
     },
     'EN': {
-        'chat_max_spend': "🔍 The region with the highest spending is {region} with {value} €.",
-        'chat_min_spend': "🔍 The region with the lowest spending is {region} with {value} €.",
-        'chat_max_lic': "🏆 {region} leads in licenses with {value:,}.",
-        'chat_single_region': "📍 In {region}: Spending of {gasto} € and {lic} licenses.",
-        'chat_analyze': "🧠 I have analyzed the current data. Do you need any specific details?",
         'chat_error_data': "⚠️ No data available for analysis.",
         'chat_toxic_error': "⚠️ Message detected as inappropriate. Please make respectful queries."
     }
