@@ -93,42 +93,94 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
         )
     return {"access_token": f"fake-token-{user['username']}", "token_type": "bearer"}
 
+# --- Data Helper ---
+def build_home_data(year: int) -> pd.DataFrame:
+    """Carga y une federados.parquet + gasto.parquet para el año indicado."""
+    base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "processed")
+    fed_path = os.path.join(base_dir, "federados.parquet")
+    gas_path = os.path.join(base_dir, "gasto.parquet")
+    
+    if not os.path.exists(fed_path) or not os.path.exists(gas_path):
+        raise FileNotFoundError("Raw parquet files not found")
+
+    EXCLUDED_CCAA = {'TOTAL', 'Sin territorializar', 'Ceuta', 'Melilla'}
+
+    # Mapeo ccaa_limpia de federados → clave equivalente en gasto
+    CCAA_KEY_MAP = {
+        'asturias, principado de':     'asturias (principado de)',
+        'balears, illes':              'balears (illes)',
+        'madrid, comunidad de':        'madrid (comunidad de)',
+        'murcia, regi\u00f3n de':           'murcia (regi\u00f3n de)',
+        'navarra, comunidad foral de': 'navarra (comunidad foral de)',
+        'rioja, la':                   'rioja (la)',
+    }
+
+    fed = pd.read_parquet(fed_path)
+    gas = pd.read_parquet(gas_path)
+
+    # Licencias totales por CCAA (fila 'TOTAL' de federación)
+    fed_year = (
+        fed[
+            (fed['periodo'] == year)
+            & (fed['Federación'] == 'TOTAL')
+            & (~fed['Comunidad autónoma'].isin(EXCLUDED_CCAA))
+        ][['Comunidad autónoma', 'ccaa_limpia', 'Total_Num']]
+        .rename(columns={'Total_Num': 'Licencias Federadas', 'Comunidad autónoma': 'CCAA'})
+        .copy()
+    )
+    # Normalizar ccaa_limpia de federados para que coincida con gasto
+    fed_year['ccaa_key'] = fed_year['ccaa_limpia'].map(
+        lambda x: CCAA_KEY_MAP.get(x, x)
+    )
+
+    # Gasto medio por hogar
+    gas_year = (
+        gas[
+            (gas['periodo'] == year)
+            & (gas['Indicador'] == 'Gasto medio por hogar (Euros)')
+            & (gas['Comunidad autónoma'] != 'TOTAL')
+        ][['ccaa_limpia', 'Total_Num']]
+        .rename(columns={'Total_Num': 'Gasto Promedio Hogar Eur', 'ccaa_limpia': 'ccaa_key'})
+    )
+
+    df = pd.merge(fed_year, gas_year, on='ccaa_key', how='inner')
+    df = df.drop(columns=['ccaa_limpia', 'ccaa_key'])
+    return df
+
+
 @app.get("/api/v1/dashboard/metrics/{year}")
 def get_dashboard_metrics(year: int, territory: str = "Todas las CCAA"):
-    file_path = os.path.join(DATA_DIR, f"anio={year}", "hechos_indicadores.parquet")
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Data for this year not found")
-        
     try:
-        df = pd.read_parquet(file_path)
-        df = df.rename(columns={'Gasto_Promedio_Hogar_Eur': 'Gasto Promedio Hogar Eur', 'Licencias_Federadas': 'Licencias Federadas'})
+        df = build_home_data(year)
         if territory != "Todas las CCAA" and territory != "All Regions":
             df = df[df['CCAA'] == territory]
         
         if df.empty:
-            return {"avg_spending": 0, "total_licenses": 0, "areas_analyzed": 0}
+            raise HTTPException(status_code=404, detail="Data for this year not found")
 
         return {
             "avg_spending": df['Gasto Promedio Hogar Eur'].mean(),
             "total_licenses": int(df['Licencias Federadas'].sum()),
             "areas_analyzed": len(df)
         }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Raw data files not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/dashboard/charts/{year}")
 def get_dashboard_charts(year: int, territory: str = "Todas las CCAA"):
-    file_path = os.path.join(DATA_DIR, f"anio={year}", "hechos_indicadores.parquet")
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Data for this year not found")
-        
     try:
-        df = pd.read_parquet(file_path)
-        df = df.rename(columns={'Gasto_Promedio_Hogar_Eur': 'Gasto Promedio Hogar Eur', 'Licencias_Federadas': 'Licencias Federadas'})
+        df = build_home_data(year)
         if territory != "Todas las CCAA" and territory != "All Regions":
             df = df[df['CCAA'] == territory]
+            
+        if df.empty:
+            raise HTTPException(status_code=404, detail="Data for this year not found")
 
         return df.to_dict(orient="records")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Raw data files not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -145,11 +197,14 @@ def ai_chat_assistant(request: ChatRequest):
     
     try:
         # 1. Load Data
-        file_path = os.path.join(DATA_DIR, "anio=2023", "hechos_indicadores.parquet")
-        if not os.path.exists(file_path):
+        try:
+            df = build_home_data(2023)
+        except Exception:
             return ChatResponse(response=L["chat_error_data"])
         
-        df = pd.read_parquet(file_path)
+        if df.empty:
+            return ChatResponse(response=L["chat_error_data"])
+            
         df_rag = prepare_assistant_data(df)
         
         # 2. Lazy load HF models (toxicity & LLM)
