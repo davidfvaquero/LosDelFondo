@@ -434,8 +434,6 @@ def parse_spanish_number(value):
         return float(text)
     except ValueError:
         return np.nan
-
-
 @st.cache_data
 def load_home_data(year: str) -> pd.DataFrame:
     """Carga y une federados.parquet + gasto.parquet para el año indicado.
@@ -770,4 +768,3 @@ with st.sidebar:
             st.rerun()
     else:
         st.success(L['admin_label'])
-

@@ -12,8 +12,6 @@ except ImportError:
     TOXICITY_MODEL_DIR = "models/toxicity-classifier"
     QWEN_MODEL_DIR     = "models/qwen2.5-7b-deporte"
     TOXICITY_THRESHOLD = 0.7
-
-
 # Diccionario de alias para normalizar nombres de CCAA
 ALIASES = {
     "andalucia": "Andalucía",
