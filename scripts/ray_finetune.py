@@ -35,7 +35,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -595,7 +594,6 @@ def upload_to_hub(
         )
         if model_type == "causal_lm":
             # Para Qwen: subir los adaptadores LoRA (más ligero que el modelo completo)
-            from peft import PeftModel
             # Intentar cargar como PEFT model, si no como modelo completo
             try:
                 from peft import AutoPeftModelForCausalLM
@@ -771,8 +769,6 @@ def main() -> None:
     # TAREA A: Fine-tuning Qwen2.5-7B-Instruct
     # ════════════════════════════════════════════════════════════════════════
     if not args.only_toxicity:
-        import ray.data as rd
-
         log.info("\n[A] Iniciando fine-tuning Qwen2.5-7B-Instruct...")
         qwen_ds = load_ray_dataset(QWEN_DATASET, "qwen_train")
 

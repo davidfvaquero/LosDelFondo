@@ -96,7 +96,7 @@ def pairs_from_federado(df: pd.DataFrame, filename: str) -> list[dict]:
 
         # Patrón 1: consulta directa
         partes_q = [f"deportistas de {fed}" if fed else "deportistas federados"]
-        partes_a = [f"deportistas" if not fed else f"deportistas de la federación {fed}"]
+        partes_a = ["deportistas" if not fed else f"deportistas de la federación {fed}"]
         if has_sexo and sexo:
             partes_q[0] += f" ({sexo.lower()})"
         if has_ccaa and ccaa:

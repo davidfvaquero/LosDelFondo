@@ -1,67 +1,47 @@
-import os
-import glob
+from __future__ import annotations
+
+from pathlib import Path
+
 import pandas as pd
 
-RAW_DIR = "data/raw"
-PROCESSED_DIR = "data/processed"
+SOURCE_YEAR = 2023
+SOURCE_NAME = "gasto_y_federado_2023"
 
-def fix_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Elimina BOM y espacios extra en las columnas."""
-    # Eliminar el caracter especial invisible (BOM) que suele colarse al leer con latin1
-    df.columns = [col.replace('\ufeff', '').strip() for col in df.columns]
-    return df
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SOURCE_CSV = ROOT_DIR / "data" / "raw" / f"{SOURCE_NAME}.csv"
+PROCESSED_DIR = ROOT_DIR / "data" / "processed" / "deporte_data" / f"anio={SOURCE_YEAR}"
+PROCESSED_PARQUET = PROCESSED_DIR / "hechos_indicadores.parquet"
 
-def unify_directory_csvs(directory_pattern: str, output_parquet: str) -> bool:
-    """Busca CSVs por glob pattern, los unifica y genera un Parquet."""
-    files = glob.glob(directory_pattern)
-    if not files:
-        print(f"No se encontraron archivos para el patrón: {directory_pattern}")
-        return False
 
-    dfs = []
-    for f in files:
-        try:
-            # latin1 e iso-8859-1 suelen manejar mejor los acentos en datos del gobierno español
-            df = pd.read_csv(f, sep=';', encoding='latin1')
-            df = fix_columns(df)
-            
-            # Convertir todas las columnas a string para evitar conflictos de esquemas en Parquet
-            # Esto soluciona 'Conversion failed for column Total with type object' (mezcla float/string)
-            df = df.astype(str)
-            
-            # Añadir trazabilidad
-            df['archivo_origen'] = os.path.basename(f)
-            dfs.append(df)
-            print(f"Leído exitosamente: {os.path.basename(f)}")
-        except Exception as e:
-            print(f"Error procesando {f}: {e}")
+def generate_source_dataframe() -> pd.DataFrame:
+    """Carga el CSV fuente consolidado usado por la app y los tests."""
+    return pd.read_csv(SOURCE_CSV)
 
-    if dfs:
-        # Concatenar ignorando el índice. Si hay columas distintas, insertará NaNs (comportamiento deseado)
-        df_unificado = pd.concat(dfs, ignore_index=True)
-        
-        # Guardar en parquet
-        os.makedirs(PROCESSED_DIR, exist_ok=True)
-        output_path = os.path.join(PROCESSED_DIR, output_parquet)
-        df_unificado.to_parquet(output_path, engine="pyarrow", index=False)
-        print(f" Guardado exitoso: {output_path} con {len(df_unificado)} registros y {len(df_unificado.columns)} columnas.\n")
-        return True
-    return False
+
+def build_processed_dataframe(source_df: pd.DataFrame) -> pd.DataFrame:
+    """Añade metadatos de partición al dataset base."""
+    processed_df = source_df.copy()
+    processed_df["anio"] = SOURCE_YEAR
+    processed_df["fuente"] = SOURCE_NAME
+    return processed_df
+
 
 def persist_datasets() -> tuple[str, str]:
-    """Carga los CSVs raw y devuelve las rutas de los procesados."""
-    federados_pattern = os.path.join(RAW_DIR, "Deporte_Federado", "*.csv")
-    unify_directory_csvs(federados_pattern, "federados.parquet")
-    
-    gasto_pattern = os.path.join(RAW_DIR, "Gasto_*", "*.csv")
-    unify_directory_csvs(gasto_pattern, "gasto.parquet")
+    """Genera el parquet procesado y devuelve las rutas del origen y del parquet."""
+    source_df = generate_source_dataframe()
+    processed_df = build_processed_dataframe(source_df)
 
-    return os.path.join(PROCESSED_DIR, "federados.parquet"), os.path.join(PROCESSED_DIR, "gasto.parquet")
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    processed_df.to_parquet(PROCESSED_PARQUET, index=False)
+
+    return str(SOURCE_CSV), str(PROCESSED_PARQUET)
+
 
 def main() -> None:
-    print("Iniciando procesamiento de datos...")
-    federados_path, gasto_path = persist_datasets()
-    print("¡Procesamiento finalizado!")
+    source_path, parquet_path = persist_datasets()
+    print(f"Fuente cargada: {source_path}")
+    print(f"Parquet generado: {parquet_path}")
+
 
 if __name__ == "__main__":
     main()
