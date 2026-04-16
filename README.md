@@ -66,14 +66,23 @@ pytest
 python scripts/process_data.py
 ```
 
-5. Lanza la aplicacion en local:
+5. Lanza la API:
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+6. Lanza la aplicacion en local:
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-6. Abre en el navegador la URL que muestre Streamlit, normalmente:
+7. Abre en el navegador la URL que muestre Streamlit, normalmente:
 
 ```text
 http://localhost:8501
 ```
+
+### la primera consulta de la IA puede tardar un poco en responder ya que tiene que cargar el modelo de lenguaje
+
