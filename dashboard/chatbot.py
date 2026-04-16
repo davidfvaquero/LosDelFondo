@@ -4,6 +4,14 @@ from __future__ import annotations
 import unicodedata
 import pandas as pd
 
+# Configuración central — cambia USE_REAL_MODELS en config.py para activar la IA real
+try:
+    from config import USE_REAL_MODELS, TOXICITY_MODEL_DIR, QWEN_MODEL_DIR, TOXICITY_THRESHOLD
+except ImportError:
+    USE_REAL_MODELS    = False
+    TOXICITY_MODEL_DIR = "models/toxicity-classifier"
+    QWEN_MODEL_DIR     = "models/qwen2.5-7b-deporte"
+    TOXICITY_THRESHOLD = 0.7
 # Diccionario de alias para normalizar nombres de CCAA
 ALIASES = {
     "andalucia": "Andalucía",

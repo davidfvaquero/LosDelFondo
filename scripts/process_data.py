@@ -1,81 +1,46 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-RAW_DIR = "data/raw"
-PROCESSED_DIR = "data/processed/deporte_data/anio=2023"
 SOURCE_YEAR = 2023
-SOURCE_NAME = "MEFD_DEPORTEData"
-CCAA_LIST = [
-    "Andalucía",
-    "Aragón",
-    "Asturias, Principado de",
-    "Balears, Illes",
-    "Canarias",
-    "Cantabria",
-    "Castilla y León",
-    "Castilla - La Mancha",
-    "Cataluña",
-    "Comunitat Valenciana",
-    "Extremadura",
-    "Galicia",
-    "Madrid, Comunidad de",
-    "Murcia, Región de",
-    "Navarra, Comunidad Foral de",
-    "País Vasco",
-    "Rioja, La",
-]
+SOURCE_NAME = "gasto_y_federado_2023"
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SOURCE_CSV = ROOT_DIR / "data" / "raw" / f"{SOURCE_NAME}.csv"
+PROCESSED_DIR = ROOT_DIR / "data" / "processed" / "deporte_data" / f"anio={SOURCE_YEAR}"
+PROCESSED_PARQUET = PROCESSED_DIR / "hechos_indicadores.parquet"
 
 
-def generate_source_dataframe(seed: int = 42) -> pd.DataFrame:
-    """Create the reproducible source dataframe used by the app."""
-    np.random.seed(seed)
-    gasto_base = np.random.normal(300, 50, len(CCAA_LIST))
-    licencias_base = gasto_base * np.random.normal(300, 50, len(CCAA_LIST)) + np.random.normal(
-        10000, 5000, len(CCAA_LIST)
-    )
-
-    return pd.DataFrame(
-        {
-            "CCAA": CCAA_LIST,
-            "Gasto_Promedio_Hogar_Eur": round(pd.Series(gasto_base), 2),
-            "Licencias_Federadas": round(pd.Series(licencias_base)).astype(int),
-            "Poblacion_Activa_Dep": round(pd.Series(licencias_base) * 1.5).astype(int),
-        }
-    )
+def generate_source_dataframe() -> pd.DataFrame:
+    """Carga el CSV fuente consolidado usado por la app y los tests."""
+    return pd.read_csv(SOURCE_CSV)
 
 
-def build_processed_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """Add the columns expected by the analytical model."""
-    df_hechos = df_raw.copy()
-    df_hechos["anio"] = SOURCE_YEAR
-    df_hechos["fuente"] = SOURCE_NAME
-    return df_hechos
+def build_processed_dataframe(source_df: pd.DataFrame) -> pd.DataFrame:
+    """Añade metadatos de partición al dataset base."""
+    processed_df = source_df.copy()
+    processed_df["anio"] = SOURCE_YEAR
+    processed_df["fuente"] = SOURCE_NAME
+    return processed_df
 
 
 def persist_datasets() -> tuple[str, str]:
-    """Generate, save and return the raw and parquet dataset paths."""
-    os.makedirs(RAW_DIR, exist_ok=True)
-    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    """Genera el parquet procesado y devuelve las rutas del origen y del parquet."""
+    source_df = generate_source_dataframe()
+    processed_df = build_processed_dataframe(source_df)
 
-    df_raw = generate_source_dataframe()
-    raw_path = os.path.join(RAW_DIR, "gasto_y_federado_2023.csv")
-    df_raw.to_csv(raw_path, index=False)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    processed_df.to_parquet(PROCESSED_PARQUET, index=False)
 
-    df_hechos = build_processed_dataframe(df_raw)
-    parquet_path = os.path.join(PROCESSED_DIR, "hechos_indicadores.parquet")
-    df_hechos.to_parquet(parquet_path, index=False, engine="pyarrow")
-
-    return raw_path, parquet_path
+    return str(SOURCE_CSV), str(PROCESSED_PARQUET)
 
 
 def main() -> None:
-    raw_path, parquet_path = persist_datasets()
-    print(f"Datos raw guardados en: {raw_path}")
-    print(f"Datos procesados (Parquet) guardados en: {parquet_path}")
+    source_path, parquet_path = persist_datasets()
+    print(f"Fuente cargada: {source_path}")
+    print(f"Parquet generado: {parquet_path}")
 
 
 if __name__ == "__main__":
