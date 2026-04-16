@@ -6,7 +6,10 @@ import plotly.express as px
 
 
 try:
-    from dashboard.chatbot import prepare_assistant_data, generate_chat_response
+    from dashboard.chatbot import (
+        prepare_assistant_data,
+        check_toxicity, load_models, generate_llm_response,
+    )
 except ImportError:
     from chatbot import prepare_assistant_data, generate_chat_response
 
@@ -350,6 +353,57 @@ def apply_plotly_style(fig):
     )
     return fig
 
+
+@st.cache_data
+def load_home_data(year: str) -> pd.DataFrame:
+    """Carga y une federados.parquet + gasto.parquet para el año indicado.
+    federados usa comas ('asturias, principado de') y gasto usa paréntesis
+    ('asturias (principado de)'), por lo que se normaliza ccaa_limpia antes del join."""
+    EXCLUDED_CCAA = {'TOTAL', 'Sin territorializar', 'Ceuta', 'Melilla'}
+
+    # Mapeo ccaa_limpia de federados → clave equivalente en gasto
+    CCAA_KEY_MAP = {
+        'asturias, principado de':     'asturias (principado de)',
+        'balears, illes':              'balears (illes)',
+        'madrid, comunidad de':        'madrid (comunidad de)',
+        'murcia, regi\u00f3n de':           'murcia (regi\u00f3n de)',
+        'navarra, comunidad foral de': 'navarra (comunidad foral de)',
+        'rioja, la':                   'rioja (la)',
+    }
+
+    fed = pd.read_parquet("data/processed/federados.parquet")
+    gas = pd.read_parquet("data/processed/gasto.parquet")
+    yr = int(year)
+
+    # Licencias totales por CCAA (fila 'TOTAL' de federación)
+    fed_year = (
+        fed[
+            (fed['periodo'] == yr)
+            & (fed['Federación'] == 'TOTAL')
+            & (~fed['Comunidad autónoma'].isin(EXCLUDED_CCAA))
+        ][['Comunidad autónoma', 'ccaa_limpia', 'Total_Num']]
+        .rename(columns={'Total_Num': 'Licencias_Federadas', 'Comunidad autónoma': 'CCAA'})
+        .copy()
+    )
+    # Normalizar ccaa_limpia de federados para que coincida con gasto
+    fed_year['ccaa_key'] = fed_year['ccaa_limpia'].map(
+        lambda x: CCAA_KEY_MAP.get(x, x)
+    )
+
+    # Gasto medio por hogar
+    gas_year = (
+        gas[
+            (gas['periodo'] == yr)
+            & (gas['Indicador'] == 'Gasto medio por hogar (Euros)')
+            & (gas['Comunidad autónoma'] != 'TOTAL')
+        ][['ccaa_limpia', 'Total_Num']]
+        .rename(columns={'Total_Num': 'Gasto_Promedio_Hogar_Eur', 'ccaa_limpia': 'ccaa_key'})
+    )
+
+    df = pd.merge(fed_year, gas_year, on='ccaa_key', how='inner')
+    df = df.drop(columns=['ccaa_limpia', 'ccaa_key'])
+    return df
+
 # Título y encabezado
 st.title(L['main_title'])
 st.markdown(f"### {L['main_subtitle']}")
@@ -414,19 +468,50 @@ with tab1:
             col1.metric(L['metric_spending'], f"€ {metrics['avg_spending']:.0f}", None)
             col2.metric(L['metric_licenses'], f"{metrics['total_licenses']/1e6:.1f}M" if metrics['total_licenses'] > 1e5 else f"{metrics['total_licenses']:,}", None)
             col3.metric(L['metric_areas'], str(metrics['areas_analyzed']), None)
+    try:
+        # Cargar datos desde federados.parquet y gasto.parquet
+        df_real = load_home_data(st.session_state.sel_year)
+        df_display = df_real.rename(columns={
+            'Gasto_Promedio_Hogar_Eur': L['col_gasto'],
+            'Licencias_Federadas': L['col_lic'],
+            'CCAA': L['col_ccaa'],
+        })
+
+        # Aplicar filtro de Territorio
+        if st.session_state.sel_territory != "Todas las CCAA":
+            df_filtered = df_display[df_real['CCAA'] == st.session_state.sel_territory]
         else:
-            st.error(L['err_no_data'])
-            
-        # 2. Obtener Datos de Gráficos Cacheados
-        df_filtered = fetch_charts(st.session_state.sel_year, territory_q)
-        if df_filtered is not None and not df_filtered.empty:
-            st.subheader(L['chart_evolution'])
-            fig_scatter = px.scatter(df_filtered, x=L['col_gasto'], y=L['col_lic'], hover_name=L['col_ccaa'], color_discrete_sequence=[accent_color])
-            st.plotly_chart(apply_plotly_style(fig_scatter), width="stretch")
-            
-            st.subheader(L['chart_spending_region'])
-            fig_bar = px.bar(df_filtered, x=L['col_ccaa'], y=L['col_gasto'], color_discrete_sequence=[accent_color])
-            st.plotly_chart(apply_plotly_style(fig_bar), width="stretch")
+            df_filtered = df_display
+
+        # Métricas Dinámicas
+        col1, col2, col3 = st.columns(3)
+        if not df_filtered.empty:
+            avg_gasto = df_filtered[L['col_gasto']].mean()
+            total_licencias = df_filtered[L['col_lic']].sum()
+            num_ccaa = len(df_filtered)
+
+            col1.metric(L['metric_spending'], f"€ {avg_gasto:.0f}", None)
+            col2.metric(
+                L['metric_licenses'],
+                f"{total_licencias/1e6:.1f}M" if total_licencias > 1e5 else f"{total_licencias:,.0f}",
+                None,
+            )
+            col3.metric(L['metric_areas'], str(num_ccaa), None)
+
+        st.subheader(L['chart_evolution'])
+        fig_scatter = px.scatter(
+            df_filtered, x=L['col_gasto'], y=L['col_lic'],
+            hover_name=L['col_ccaa'], color_discrete_sequence=[accent_color],
+        )
+        st.plotly_chart(apply_plotly_style(fig_scatter), use_container_width=True)
+
+        st.subheader(L['chart_spending_region'])
+        fig_bar = px.bar(
+            df_filtered.sort_values(L['col_gasto'], ascending=False),
+            x=L['col_ccaa'], y=L['col_gasto'],
+            color_discrete_sequence=[accent_color],
+        )
+        st.plotly_chart(apply_plotly_style(fig_bar), use_container_width=True)
 
             st.subheader(L['table_indicators'])
             df_table = df_filtered[[L['col_ccaa'], L['col_gasto'], L['col_lic']]].copy()
@@ -460,6 +545,44 @@ with tab2:
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
             full_response = ""
+
+            # ── Layer 1: manual toxic check (no model needed) ──────────────
+            blocked_msg_es = "⚠️ El mensaje ha sido bloqueado por nuestra política de seguridad debido a lenguaje tóxico o inapropiado."
+            blocked_msg_en = "⚠️ The message has been blocked by our security policy due to toxic or inappropriate language."
+            blocked_msg = blocked_msg_es if st.session_state.lang == "ES" else blocked_msg_en
+
+            prompt_norm = normalize(prompt)
+            manually_toxic = any(normalize(t) in prompt_norm for t in MANUAL_TOXIC_TERMS)
+
+            if manually_toxic:
+                assistant_response = blocked_msg
+            else:
+                # ── Layer 2: load data + try AI pipeline ──────────────────
+                try:
+                    @st.cache_data
+                    def load_assistant_data():
+                        df = pd.read_parquet("data/processed/deporte_data/anio=2023/hechos_indicadores.parquet")
+                        return prepare_assistant_data(df)
+
+                    df_rag = load_assistant_data()
+
+                    # Try AI model
+                    try:
+                        toxic_clf, llm_pipeline = load_models()
+                        is_toxic, _ = check_toxicity(prompt, toxic_clf)
+                        if is_toxic:
+                            assistant_response = blocked_msg
+                        else:
+                            assistant_response = generate_llm_response(
+                                prompt, df_rag, llm_pipeline, st.session_state.lang
+                            )
+                    except Exception as ai_err:
+                        # Show the real error so we can diagnose it
+                        assistant_response = f"❌ Error al cargar el modelo IA: {type(ai_err).__name__}: {ai_err}"
+
+                except Exception as e:
+                    assistant_response = f"{L['chat_error_data']} ({str(e)})"
+
             try:
                 headers = {"Content-Type": "application/json"}
                 if st.session_state.token:
@@ -553,22 +676,24 @@ with st.sidebar:
     
     st.markdown(f"### {L['sidebar_filters']}")
     # Filtro de Año persistente
-    year_options = ["2023", "2022", "2021", "2020"]
+    # Años disponibles: intersección de federados (2005-2024) y gasto (2006-2023)
+    year_options = [str(y) for y in range(2023, 2005, -1)]
+    sel_year_idx = year_options.index(st.session_state.sel_year) if st.session_state.sel_year in year_options else 0
     st.selectbox(
-        L['filter_year'], 
-        year_options, 
-        index=year_options.index(st.session_state.sel_year),
+        L['filter_year'],
+        year_options,
+        index=sel_year_idx,
         key='sel_year'
     )
-    
-    # Filtro de Territorio persistente
+
+    # Filtro de Territorio persistente (nombres exactos de federados.parquet)
     territory_options = [
-        L['all_ccaa'], 
-        "Andalucía", "Aragón", "Asturias, Principado de", "Balears, Illes", 
-        "Canarias", "Cantabria", "Castilla y León", "Castilla - La Mancha", 
-        "Cataluña", "Comunitat Valenciana", "Extremadura", "Galicia", 
-        "Madrid, Comunidad de", "Murcia, Región de", "Navarra, Comunidad Foral de", 
-        "País Vasco", "Rioja, La"
+        L['all_ccaa'],
+        "Andalucía", "Aragón", "Asturias, Principado de", "Balears, Illes",
+        "Canarias", "Cantabria", "Castilla y León", "Castilla-La Mancha",
+        "Cataluña", "Comunitat Valenciana", "Extremadura", "Galicia",
+        "Madrid, Comunidad de", "Murcia, Región de", "Navarra, Comunidad Foral de",
+        "País Vasco", "Rioja, La",
     ]
     st.selectbox(
         L['filter_territory'], 
