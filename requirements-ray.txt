@@ -1,0 +1,46 @@
+# requirements-ray.txt
+# =====================
+# Dependencias COMPLETAS para ejecutar el clúster Ray en Linux/EC2 con GPU.
+#
+# Instalación en el nodo head y en cada worker:
+#   pip install -r requirements-ray.txt
+#
+# Para CUDA 11.8 (g4dn.xlarge, p3, etc.):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu118
+#
+# Para CUDA 12.1+ (g5, p4, etc.):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# ─── Ray ─────────────────────────────────────────────────────────────────────
+ray[train,data]>=2.10.0
+
+# ─── PyTorch (instalar la versión con CUDA adecuada manualmente) ──────────────
+torch>=2.2.0
+torchvision>=0.17.0
+
+# ─── HuggingFace ─────────────────────────────────────────────────────────────
+transformers>=4.40.0
+datasets>=2.18.0
+accelerate>=0.28.0
+huggingface_hub>=0.22.0
+tokenizers>=0.19.0
+
+# ─── Fine-tuning (PEFT / QLoRA / SFT) ───────────────────────────────────────
+peft>=0.10.0
+trl>=0.8.6
+bitsandbytes>=0.43.0
+
+# ─── Clasificador / Métricas ─────────────────────────────────────────────────
+scikit-learn>=1.4.0
+numpy>=1.26.0
+
+# ─── Utilidades de tokenización ──────────────────────────────────────────────
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+tiktoken>=0.6.0
+
+# ─── Para el dashboard (si se lanza en el mismo entorno) ─────────────────────
+streamlit>=1.30.0
+pandas>=2.2.0
+pyarrow>=15.0.0
+plotly>=5.18.0
