@@ -8,15 +8,51 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  prepare:
     if: >
       github.event_name == 'workflow_dispatch' ||
       (
         github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_branch == 'main'
+        contains(fromJson('["main","dev","api"]'), github.event.workflow_run.head_branch)
       )
     runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.select.outputs.branch }}
+      environment: ${{ steps.select.outputs.environment }}
+    steps:
+      - name: Select branch and environment
+        id: select
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            branch="${{ github.ref_name }}"
+          else
+            branch="${{ github.event.workflow_run.head_branch }}"
+          fi
+
+          case "$branch" in
+            main)
+              environment="Production"
+              ;;
+            dev)
+              environment="staging"
+              ;;
+            api)
+              environment="api"
+              ;;
+            *)
+              echo "Unsupported branch for EC2 deploy: $branch"
+              exit 1
+              ;;
+          esac
+
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: ${{ needs.prepare.outputs.environment }}
 
     steps:
       - name: Validate required secrets
@@ -26,8 +62,9 @@ jobs:
           EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
           EC2_APP_DIR: ${{ secrets.EC2_APP_DIR }}
+          EC2_SYSTEMD_SERVICE: ${{ secrets.EC2_SYSTEMD_SERVICE }}
         run: |
-          for secret_name in EC2_HOST EC2_USER EC2_SSH_PRIVATE_KEY EC2_KNOWN_HOSTS EC2_APP_DIR; do
+          for secret_name in EC2_HOST EC2_USER EC2_SSH_PRIVATE_KEY EC2_KNOWN_HOSTS EC2_APP_DIR EC2_SYSTEMD_SERVICE; do
             if [ -z "${!secret_name}" ]; then
               echo "Missing required secret: $secret_name"
               exit 1
@@ -51,6 +88,7 @@ jobs:
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_APP_DIR: ${{ secrets.EC2_APP_DIR }}
           EC2_SYSTEMD_SERVICE: ${{ secrets.EC2_SYSTEMD_SERVICE }}
+          DEPLOY_BRANCH: ${{ needs.prepare.outputs.branch }}
         run: |
           ssh "$EC2_USER@$EC2_HOST" \
-            "cd '$EC2_APP_DIR' && DEPLOY_BRANCH='main' EC2_SYSTEMD_SERVICE='$EC2_SYSTEMD_SERVICE' bash scripts/deploy_ec2.sh"
+            "cd '$EC2_APP_DIR' && DEPLOY_BRANCH='$DEPLOY_BRANCH' EC2_SYSTEMD_SERVICE='$EC2_SYSTEMD_SERVICE' bash scripts/deploy_ec2.sh"

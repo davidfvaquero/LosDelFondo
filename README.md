@@ -40,14 +40,30 @@ Si quieres desplegar en una instancia EC2 en vez de Render, el repo incluye ahor
 
 El flujo es:
 
-1. Haces `push` o merge a `main`.
+1. Haces `push` o merge a `main`, `dev` o `api`.
 2. GitHub ejecuta la CI.
 3. Si la CI termina bien, GitHub abre una conexion SSH con la EC2.
 4. La EC2 hace `git fetch`, actualiza el repo, instala dependencias, regenera datos y reinicia el servicio.
 
+### Environments y ramas
+
+Configura tres `Environments` en GitHub:
+
+- `Production` para la rama `main`
+- `staging` para la rama `dev`
+- `api` para la rama `api`
+
+El workflow selecciona automaticamente el environment segun la rama:
+
+- `main` -> `Production`
+- `dev` -> `staging`
+- `api` -> `api`
+
+En cada environment, limita `Deployment branches and tags` a su rama correspondiente.
+
 ### Secrets que debes crear en GitHub
 
-En `Settings > Secrets and variables > Actions`, crea estos secrets del repositorio:
+En `Settings > Environments`, entra en cada environment y crea estos mismos secrets, pero con los valores de la EC2 correspondiente:
 
 - `EC2_HOST`: IP publica o DNS de la instancia.
 - `EC2_USER`: usuario SSH, por ejemplo `ubuntu`.
@@ -55,6 +71,12 @@ En `Settings > Secrets and variables > Actions`, crea estos secrets del reposito
 - `EC2_KNOWN_HOSTS`: salida de `ssh-keyscan -H <tu-host>`.
 - `EC2_APP_DIR`: ruta absoluta donde esta clonado el repo en la EC2, por ejemplo `/opt/losdelfondo`.
 - `EC2_SYSTEMD_SERVICE`: nombre del servicio `systemd` que arranca Streamlit, por ejemplo `losdelfondo`.
+
+Ejemplo:
+
+- environment `Production`: secretos de la EC2 de produccion
+- environment `staging`: secretos de la EC2 de pruebas
+- environment `api`: secretos de la EC2 donde vive la API
 
 ### Preparacion unica en la EC2
 
