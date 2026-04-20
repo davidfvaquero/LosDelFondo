@@ -5,6 +5,8 @@ import pandas as pd
 import numpy as np
 import os
 import sys
+import unicodedata
+from functools import lru_cache
 
 # Import components from the new structural location
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -94,6 +96,69 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     return {"access_token": f"fake-token-{user['username']}", "token_type": "bearer"}
 
 # --- Data Helper ---
+def repair_mojibake(text: str) -> str:
+    """Repara textos UTF-8 mal decodificados como latin-1 cuando es posible."""
+    clean = str(text).replace("\ufeff", "").replace("ï»¿", "")
+    try:
+        repaired = clean.encode("latin1").decode("utf-8")
+        bad_before = clean.count("Ã") + clean.count("ï")
+        bad_after = repaired.count("Ã") + repaired.count("ï")
+        if bad_after <= bad_before:
+            clean = repaired
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return clean.strip()
+
+def normalize_column_name(name: str) -> str:
+    """Normaliza nombres de columnas eliminando BOM, tildes y ruido de encoding."""
+    clean = repair_mojibake(name).lower()
+    clean = unicodedata.normalize("NFKD", clean)
+    clean = "".join(c for c in clean if not unicodedata.combining(c))
+    return clean
+
+def coalesce_normalized_columns(df: pd.DataFrame, canonical_map: dict[str, list[str]]) -> pd.DataFrame:
+    """Crea columnas canónicas combinando variantes equivalentes por nombre."""
+    result = df.copy()
+    normalized_lookup: dict[str, list[str]] = {}
+    for col in result.columns:
+        normalized_lookup.setdefault(normalize_column_name(col), []).append(col)
+
+    for canonical_name, aliases in canonical_map.items():
+        candidate_cols: list[str] = []
+        for alias in aliases:
+            alias_key = normalize_column_name(alias)
+            candidate_cols.extend(normalized_lookup.get(alias_key, []))
+            for normalized_col, original_cols in normalized_lookup.items():
+                if normalized_col.endswith(alias_key) and normalized_col != alias_key:
+                    candidate_cols.extend(original_cols)
+        if not candidate_cols:
+            continue
+        unique_candidates = list(dict.fromkeys(candidate_cols))
+        result[canonical_name] = result[unique_candidates].bfill(axis=1).iloc[:, 0]
+
+    return result
+
+def parse_spanish_number(value):
+    """Convierte números en formato español a float."""
+    if pd.isna(value):
+        return np.nan
+    text = str(value).strip().replace("\xa0", "").replace(" ", "")
+    if not text or text == "..":
+        return np.nan
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1:
+        text = text.replace(".", "")
+    elif text.count(".") == 1:
+        left, right = text.split(".")
+        if right.isdigit() and len(right) == 3 and left.isdigit():
+            text = left + right
+    try:
+        return float(text)
+    except ValueError:
+        return np.nan
+
+@lru_cache(maxsize=32)
 def build_home_data(year: int) -> pd.DataFrame:
     """Carga y une federados.parquet + gasto.parquet para el año indicado."""
     base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "processed")
@@ -115,17 +180,53 @@ def build_home_data(year: int) -> pd.DataFrame:
         'rioja, la':                   'rioja (la)',
     }
 
-    fed = pd.read_parquet(fed_path)
-    gas = pd.read_parquet(gas_path)
+    fed = coalesce_normalized_columns(
+        pd.read_parquet(fed_path),
+        {
+            "federacion": ["Federación", "Federacion"],
+            "comunidad_autonoma": ["Comunidad autónoma", "Comunidad autonoma"],
+            "periodo": ["periodo"],
+            "total_raw": ["Total"],
+        },
+    )
+    gas = coalesce_normalized_columns(
+        pd.read_parquet(gas_path),
+        {
+            "indicador": ["Indicador"],
+            "comunidad_autonoma": ["Comunidad autónoma", "Comunidad autonoma"],
+            "periodo": ["periodo"],
+            "total_raw": ["Total"],
+        },
+    )
+    yr = int(year)
 
-    # Licencias totales por CCAA (fila 'TOTAL' de federación)
+    for df in (fed, gas):
+        df["periodo"] = pd.to_numeric(df["periodo"], errors="coerce")
+        
+        if "total_raw" in df.columns:
+            unique_totals = df["total_raw"].unique()
+            tot_map = {val: parse_spanish_number(val) for val in unique_totals}
+            df["Total_Num"] = df["total_raw"].map(tot_map)
+            
+        for text_col in [col for col in ("federacion", "comunidad_autonoma", "indicador") if col in df.columns]:
+            unique_texts = df[text_col].dropna().unique()
+            text_map = {val: repair_mojibake(val) for val in unique_texts}
+            df[text_col] = df[text_col].map(lambda x: text_map.get(x, x))
+            
+        if "comunidad_autonoma" in df.columns:
+            unique_ccaa = df["comunidad_autonoma"].dropna().unique()
+            ccaa_map = {val: normalize_column_name(str(val)) for val in unique_ccaa}
+            df["ccaa_limpia"] = df["comunidad_autonoma"].map(lambda x: ccaa_map.get(x, x))
+
+    # Licencias totales por CCAA (fuente federado_01, fila 'TOTAL' de federación)
     fed_year = (
         fed[
-            (fed['periodo'] == year)
-            & (fed['Federación'] == 'TOTAL')
-            & (~fed['Comunidad autónoma'].isin(EXCLUDED_CCAA))
-        ][['Comunidad autónoma', 'ccaa_limpia', 'Total_Num']]
-        .rename(columns={'Total_Num': 'Licencias Federadas', 'Comunidad autónoma': 'CCAA'})
+            (fed['periodo'] == yr)
+            & (fed['archivo_origen'] == 'federado_01.csv')
+            & (fed['federacion'] == 'TOTAL')
+            & (~fed['comunidad_autonoma'].isin(EXCLUDED_CCAA))
+        ][['comunidad_autonoma', 'ccaa_limpia', 'Total_Num']]
+        .rename(columns={'Total_Num': 'Licencias Federadas', 'comunidad_autonoma': 'CCAA'})
         .copy()
     )
     # Normalizar ccaa_limpia de federados para que coincida con gasto
@@ -136,9 +237,10 @@ def build_home_data(year: int) -> pd.DataFrame:
     # Gasto medio por hogar
     gas_year = (
         gas[
-            (gas['periodo'] == year)
-            & (gas['Indicador'] == 'Gasto medio por hogar (Euros)')
-            & (gas['Comunidad autónoma'] != 'TOTAL')
+            (gas['periodo'] == yr)
+            & (gas['archivo_origen'] == 'gasto_03.csv')
+            & (gas['indicador'] == 'Gasto medio por hogar (Euros)')
+            & (gas['comunidad_autonoma'] != 'TOTAL')
         ][['ccaa_limpia', 'Total_Num']]
         .rename(columns={'Total_Num': 'Gasto Promedio Hogar Eur', 'ccaa_limpia': 'ccaa_key'})
     )
@@ -183,6 +285,42 @@ def get_dashboard_charts(year: int, territory: str = "Todas las CCAA"):
         raise HTTPException(status_code=404, detail="Raw data files not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/dashboard/filters")
+def get_dashboard_filters():
+    return {
+        "years": [str(y) for y in range(2023, 2005, -1)],
+        "territories": [
+            "Todas las CCAA",
+            "Andalucía", "Aragón", "Asturias, Principado de", "Balears, Illes",
+            "Canarias", "Cantabria", "Castilla y León", "Castilla-La Mancha",
+            "Cataluña", "Comunitat Valenciana", "Extremadura", "Galicia",
+            "Madrid, Comunidad de", "Murcia, Región de", "Navarra, Comunidad Foral de",
+            "País Vasco", "Rioja, La"
+        ]
+    }
+
+@app.get("/api/v1/admin/stats")
+def get_admin_stats(token: str = Depends(oauth2_scheme)):
+    # Simulates admin backend logic
+    get_current_user(token)
+    return {
+        "active_users": 142,
+        "total_queries": 2840,
+        "chart_q": np.random.randn(20).tolist(),
+        "chart_v": np.random.randn(20).tolist(),
+        "total_by_day": np.random.randint(10, 100, size=7).tolist(),
+        "failed_attempts": 3,
+        "logs": [
+            {"User": "admin", "IP": "192.168.1.45", "Status": "Success"},
+            {"User": "root", "IP": "85.23.11.102", "Status": "Blocked"},
+            {"User": "guest", "IP": "172.16.0.5", "Status": "Failed"},
+            {"User": "admin", "IP": "192.168.1.45", "Status": "Success"}
+        ],
+        "cpu_load": "24%",
+        "ram_usage": "1.2 GB",
+        "system_load": np.random.randn(20).tolist()
+    }
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
 def ai_chat_assistant(request: ChatRequest):

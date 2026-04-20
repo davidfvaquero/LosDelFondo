@@ -346,148 +346,6 @@ def apply_plotly_style(fig):
     )
     return fig
 
-
-def repair_mojibake(text: str) -> str:
-    """Repara textos UTF-8 mal decodificados como latin-1 cuando es posible."""
-    clean = str(text).replace("\ufeff", "").replace("ï»¿", "")
-    try:
-        repaired = clean.encode("latin1").decode("utf-8")
-        bad_before = clean.count("Ã") + clean.count("ï")
-        bad_after = repaired.count("Ã") + repaired.count("ï")
-        if bad_after <= bad_before:
-            clean = repaired
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        pass
-    return clean.strip()
-
-
-def normalize_column_name(name: str) -> str:
-    """Normaliza nombres de columnas eliminando BOM, tildes y ruido de encoding."""
-    clean = repair_mojibake(name).lower()
-    clean = unicodedata.normalize("NFKD", clean)
-    clean = "".join(c for c in clean if not unicodedata.combining(c))
-    return clean
-
-
-def coalesce_normalized_columns(df: pd.DataFrame, canonical_map: dict[str, list[str]]) -> pd.DataFrame:
-    """Crea columnas canónicas combinando variantes equivalentes por nombre."""
-    result = df.copy()
-    normalized_lookup: dict[str, list[str]] = {}
-    for col in result.columns:
-        normalized_lookup.setdefault(normalize_column_name(col), []).append(col)
-
-    for canonical_name, aliases in canonical_map.items():
-        candidate_cols: list[str] = []
-        for alias in aliases:
-            alias_key = normalize_column_name(alias)
-            candidate_cols.extend(normalized_lookup.get(alias_key, []))
-            for normalized_col, original_cols in normalized_lookup.items():
-                if normalized_col.endswith(alias_key) and normalized_col != alias_key:
-                    candidate_cols.extend(original_cols)
-        if not candidate_cols:
-            continue
-        unique_candidates = list(dict.fromkeys(candidate_cols))
-        result[canonical_name] = result[unique_candidates].bfill(axis=1).iloc[:, 0]
-
-    return result
-
-
-def parse_spanish_number(value):
-    """Convierte números en formato español a float."""
-    if pd.isna(value):
-        return np.nan
-    text = str(value).strip().replace("\xa0", "").replace(" ", "")
-    if not text or text == "..":
-        return np.nan
-    if "," in text:
-        text = text.replace(".", "").replace(",", ".")
-    elif text.count(".") > 1:
-        text = text.replace(".", "")
-    elif text.count(".") == 1:
-        left, right = text.split(".")
-        if right.isdigit() and len(right) == 3 and left.isdigit():
-            text = left + right
-    try:
-        return float(text)
-    except ValueError:
-        return np.nan
-@st.cache_data
-def load_home_data(year: str) -> pd.DataFrame:
-    """Carga y une federados.parquet + gasto.parquet para el año indicado.
-    federados usa comas ('asturias, principado de') y gasto usa paréntesis
-    ('asturias (principado de)'), por lo que se normaliza ccaa_limpia antes del join."""
-    EXCLUDED_CCAA = {'TOTAL', 'Sin territorializar', 'Ceuta', 'Melilla'}
-
-    # Mapeo ccaa_limpia de federados → clave equivalente en gasto
-    CCAA_KEY_MAP = {
-        'asturias, principado de':     'asturias (principado de)',
-        'balears, illes':              'balears (illes)',
-        'madrid, comunidad de':        'madrid (comunidad de)',
-        'murcia, regi\u00f3n de':           'murcia (regi\u00f3n de)',
-        'navarra, comunidad foral de': 'navarra (comunidad foral de)',
-        'rioja, la':                   'rioja (la)',
-    }
-
-    fed = coalesce_normalized_columns(
-        pd.read_parquet("data/processed/federados.parquet"),
-        {
-            "federacion": ["Federación", "Federacion"],
-            "comunidad_autonoma": ["Comunidad autónoma", "Comunidad autonoma"],
-            "periodo": ["periodo"],
-            "total_raw": ["Total"],
-        },
-    )
-    gas = coalesce_normalized_columns(
-        pd.read_parquet("data/processed/gasto.parquet"),
-        {
-            "indicador": ["Indicador"],
-            "comunidad_autonoma": ["Comunidad autónoma", "Comunidad autonoma"],
-            "periodo": ["periodo"],
-            "total_raw": ["Total"],
-        },
-    )
-    yr = int(year)
-
-    for df in (fed, gas):
-        df["periodo"] = pd.to_numeric(df["periodo"], errors="coerce")
-        df["Total_Num"] = df["total_raw"].map(parse_spanish_number)
-        for text_col in [col for col in ("federacion", "comunidad_autonoma", "indicador") if col in df.columns]:
-            df[text_col] = df[text_col].map(lambda x: repair_mojibake(x) if pd.notna(x) else x)
-        df["ccaa_limpia"] = df["comunidad_autonoma"].map(
-            lambda x: normalize(str(x)) if pd.notna(x) else x
-        )
-
-    # Licencias totales por CCAA (fuente federado_01, fila 'TOTAL' de federación)
-    fed_year = (
-        fed[
-            (fed['periodo'] == yr)
-            & (fed['archivo_origen'] == 'federado_01.csv')
-            & (fed['federacion'] == 'TOTAL')
-            & (~fed['comunidad_autonoma'].isin(EXCLUDED_CCAA))
-        ][['comunidad_autonoma', 'ccaa_limpia', 'Total_Num']]
-        .rename(columns={'Total_Num': 'Licencias_Federadas', 'comunidad_autonoma': 'CCAA'})
-        .copy()
-    )
-    # Normalizar ccaa_limpia de federados para que coincida con gasto
-    fed_year['ccaa_key'] = fed_year['ccaa_limpia'].map(
-        lambda x: CCAA_KEY_MAP.get(x, x)
-    )
-
-    # Gasto medio por hogar por CCAA (fuente gasto_03)
-    gas_year = (
-        gas[
-            (gas['periodo'] == yr)
-            & (gas['archivo_origen'] == 'gasto_03.csv')
-            & (gas['indicador'] == 'Gasto medio por hogar (Euros)')
-            & (gas['comunidad_autonoma'] != 'TOTAL')
-        ][['ccaa_limpia', 'Total_Num']]
-        .rename(columns={'Total_Num': 'Gasto_Promedio_Hogar_Eur', 'ccaa_limpia': 'ccaa_key'})
-    )
-
-    df = pd.merge(fed_year, gas_year, on='ccaa_key', how='inner')
-    df = df.drop(columns=['ccaa_limpia', 'ccaa_key'])
-    return df
-
 # Título y encabezado
 st.title(L['main_title'])
 st.markdown(f"### {L['main_subtitle']}")
@@ -641,40 +499,50 @@ with tab2:
 if st.session_state.is_admin:
     with tab_admin:
         st.header(L['admin_header'])
-        st.subheader(L['admin_usage'])
-        col_u1, col_u2 = st.columns(2)
-        with col_u1:
-            st.metric(L['admin_active'], "142", None)
-            fig_usage = px.line(pd.DataFrame(np.random.randn(20, 2), columns=[L['chart_q'], L['chart_v']]), color_discrete_sequence=[accent_color, "#FF4B4B"])
-            st.plotly_chart(apply_plotly_style(fig_usage), width="stretch")
-        with col_u2:
-            st.metric(L['admin_queries'], "2,840", None)
-            fig_total = px.bar(np.random.randint(10, 100, size=(7, 1)), color_discrete_sequence=[accent_color])
-            st.plotly_chart(apply_plotly_style(fig_total), width="stretch")
         
-        st.divider()
-        
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            st.subheader(L['admin_security'])
-            st.metric(L['admin_failed'], "3", "-12%", delta_color="normal")
-            st.markdown(f"**{L['admin_last_logs']}**")
-            admin_logs = pd.DataFrame({
-                "User": ["admin", "root", "guest", "admin"],
-                "IP": ["192.168.1.45", "85.23.11.102", "172.16.0.5", "192.168.1.45"],
-                "Status": ["Success", "Blocked", "Failed", "Success"]
-            })
-            st.table(admin_logs)
+        # Cargar datos desde la API
+        try:
+            headers = {"Authorization": f"Bearer {st.session_state.token}"}
+            resp_admin = requests.get(f"{API_BASE_URL}/api/v1/admin/stats", headers=headers)
+            if resp_admin.status_code == 200:
+                admin_data = resp_admin.json()
+            else:
+                st.error("Error al cargar datos administrativos desde API.")
+                admin_data = None
+        except Exception as e:
+            st.error(f"Error conectando con la API: {e}")
+            admin_data = None
             
-        with col_s2:
-            st.subheader(L['admin_telemetry'])
-            col_t1, col_t2 = st.columns(2)
-            col_t1.metric(L['admin_cpu'], "24%", "2%")
-            col_t2.metric(L['admin_ram'], "1.2 GB", "0.1 GB")
-            st.markdown(f"**{L['admin_system_load']}**")
-            telemetry_data = pd.DataFrame(np.random.randn(20, 1), columns=[L['chart_l']])
-            fig_telemetry = px.area(telemetry_data, color_discrete_sequence=[accent_color])
-            st.plotly_chart(apply_plotly_style(fig_telemetry), width="stretch")
+        if admin_data:
+            st.subheader(L['admin_usage'])
+            col_u1, col_u2 = st.columns(2)
+            with col_u1:
+                st.metric(L['admin_active'], str(admin_data["active_users"]), None)
+                fig_usage = px.line(pd.DataFrame({L['chart_q']: admin_data["chart_q"], L['chart_v']: admin_data["chart_v"]}), color_discrete_sequence=[accent_color, "#FF4B4B"])
+                st.plotly_chart(apply_plotly_style(fig_usage), width="stretch")
+            with col_u2:
+                st.metric(L['admin_queries'], f"{admin_data['total_queries']:,}", None)
+                fig_total = px.bar(y=admin_data["total_by_day"], color_discrete_sequence=[accent_color])
+                st.plotly_chart(apply_plotly_style(fig_total), width="stretch")
+            
+            st.divider()
+            
+            col_s1, col_s2 = st.columns(2)
+            with col_s1:
+                st.subheader(L['admin_security'])
+                st.metric(L['admin_failed'], str(admin_data["failed_attempts"]), "-12%", delta_color="normal")
+                st.markdown(f"**{L['admin_last_logs']}**")
+                st.table(pd.DataFrame(admin_data["logs"]))
+                
+            with col_s2:
+                st.subheader(L['admin_telemetry'])
+                col_t1, col_t2 = st.columns(2)
+                col_t1.metric(L['admin_cpu'], admin_data["cpu_load"], "2%")
+                col_t2.metric(L['admin_ram'], admin_data["ram_usage"], "0.1 GB")
+                st.markdown(f"**{L['admin_system_load']}**")
+                telemetry_data = pd.DataFrame(admin_data["system_load"], columns=[L['chart_l']])
+                fig_telemetry = px.area(telemetry_data, color_discrete_sequence=[accent_color])
+                st.plotly_chart(apply_plotly_style(fig_telemetry), width="stretch")
 
 # Sidebar y personalización
 with st.sidebar:
@@ -706,9 +574,24 @@ with st.sidebar:
     st.divider()
     
     st.markdown(f"### {L['sidebar_filters']}")
-    # Filtro de Año persistente
-    # Años disponibles: intersección de federados (2005-2024) y gasto (2006-2023)
-    year_options = [str(y) for y in range(2023, 2005, -1)]
+    
+    @st.cache_data(show_spinner=False)
+    def fetch_filters():
+        try:
+            r = requests.get(f"{API_BASE_URL}/api/v1/dashboard/filters")
+            if r.status_code == 200:
+                return r.json()
+        except:
+            pass
+        return {"years": ["2023"], "territories": [L['all_ccaa']]}
+        
+    filters_data = fetch_filters()
+    year_options = filters_data["years"]
+    territory_options = filters_data["territories"]
+    
+    if L['all_ccaa'] not in territory_options:
+        territory_options.insert(0, L['all_ccaa'])
+
     sel_year_idx = year_options.index(st.session_state.sel_year) if st.session_state.sel_year in year_options else 0
     st.selectbox(
         L['filter_year'],
@@ -717,15 +600,6 @@ with st.sidebar:
         key='sel_year'
     )
 
-    # Filtro de Territorio persistente (nombres exactos de federados.parquet)
-    territory_options = [
-        L['all_ccaa'],
-        "Andalucía", "Aragón", "Asturias, Principado de", "Balears, Illes",
-        "Canarias", "Cantabria", "Castilla y León", "Castilla-La Mancha",
-        "Cataluña", "Comunitat Valenciana", "Extremadura", "Galicia",
-        "Madrid, Comunidad de", "Murcia, Región de", "Navarra, Comunidad Foral de",
-        "País Vasco", "Rioja, La",
-    ]
     st.selectbox(
         L['filter_territory'], 
         territory_options, 

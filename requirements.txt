@@ -22,7 +22,7 @@ sentencepiece
 protobuf
 
 # ─── Fine-tuning (Ray / QLoRA / SFT) ────────────────────────────────────────
-ray[train,data]>=2.10.0
+#ray[train,data]>=2.10.0
 peft>=0.10.0
 trl>=0.8.6
 bitsandbytes>=0.43.0

@@ -60,10 +60,10 @@ ruff check .
 pytest
 ```
 
-4. Genera o actualiza los datos procesados:
+3. Añadir token de Hugging Face:
 
 ```bash
-python scripts/process_data.py
+hf auth login
 ```
 
 5. Lanza la API:

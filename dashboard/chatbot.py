@@ -3,8 +3,8 @@
 from __future__ import annotations
 import unicodedata
 import pandas as pd
-
 # Configuración central — cambia USE_REAL_MODELS en config.py para activar la IA real
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 try:
     from config import USE_REAL_MODELS, TOXICITY_MODEL_DIR, QWEN_MODEL_DIR, TOXICITY_THRESHOLD
 except ImportError:
@@ -42,6 +42,11 @@ MAX_SPEND_PATTERNS = ["gasta mas", "maximo gasto", "most spending", "highest spe
 MIN_SPEND_PATTERNS = ["gasta menos", "minimo gasto", "least spending", "lowest spending"]
 MAX_LICENSE_PATTERNS = ["mas licencias", "most licenses", "mas federados", "mas socios"]
 
+MANUAL_TOXIC_TERMS = [
+    "tonto", "idiota", "estupido", "estúpido", "imbecil", "imbécil", 
+    "subnormal", "gilipollas", "puta", "cabron", "cabrón", "mierda", "retrasado"
+]
+
 def normalize(text: str) -> str:
     """Retorna texto en minúsculas y sin acentos."""
     return "".join(
@@ -63,26 +68,39 @@ def prepare_assistant_data(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_models():
     """Load the toxicity classifier and LLM pipeline."""
+    import os
+    from huggingface_hub import snapshot_download
+    from transformers import AutoModelForSequenceClassification
+    import peft
+
     # 1. Toxicity Classifier
     toxic_tokenizer = AutoTokenizer.from_pretrained(
         "unitary/multilingual-toxic-xlm-roberta", use_fast=False
     )
+    tox_dir = snapshot_download(repo_id="alfersal04/antiToxicidad", allow_patterns="toxicity-classifier/*")
+    tox_path = os.path.join(tox_dir, "toxicity-classifier")
+    toxic_model = AutoModelForSequenceClassification.from_pretrained(tox_path)
+    
     toxic_clf = pipeline(
         "text-classification",
-        model="unitary/multilingual-toxic-xlm-roberta",
+        model=toxic_model,
         tokenizer=toxic_tokenizer,
         top_k=None,
     )
 
-    # 2. Causal LLM (Qwen2.5-0.5B-Instruct)
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    # 2. Causal LLM (QwenDeporteData)
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
     model = AutoModelForCausalLM.from_pretrained(
-        "Qwen/Qwen2.5-0.5B-Instruct",
-        device_map="auto",
+        "Qwen/Qwen2.5-1.5B-Instruct",
     )
+    
+    qwen_dir = snapshot_download(repo_id="alfersal04/QwenDeporteData", allow_patterns="qwen2.5-finetuned/checkpoint-1443/*")
+    adapter_path = os.path.join(qwen_dir, "qwen2.5-finetuned/checkpoint-1443")
+    peft_model = peft.PeftModel.from_pretrained(model, adapter_path)
+    
     llm_pipeline = pipeline(
         "text-generation",
-        model=model,
+        model=peft_model,
         tokenizer=tokenizer,
         max_new_tokens=400,
         max_length=None,
