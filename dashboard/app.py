@@ -347,6 +347,146 @@ def apply_plotly_style(fig):
     return fig
 
 
+def repair_mojibake(text: str) -> str:
+    """Repara textos UTF-8 mal decodificados como latin-1 cuando es posible."""
+    clean = str(text).replace("\ufeff", "").replace("ï»¿", "")
+    try:
+        repaired = clean.encode("latin1").decode("utf-8")
+        bad_before = clean.count("Ã") + clean.count("ï")
+        bad_after = repaired.count("Ã") + repaired.count("ï")
+        if bad_after <= bad_before:
+            clean = repaired
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return clean.strip()
+
+
+def normalize_column_name(name: str) -> str:
+    """Normaliza nombres de columnas eliminando BOM, tildes y ruido de encoding."""
+    clean = repair_mojibake(name).lower()
+    clean = unicodedata.normalize("NFKD", clean)
+    clean = "".join(c for c in clean if not unicodedata.combining(c))
+    return clean
+
+
+def coalesce_normalized_columns(df: pd.DataFrame, canonical_map: dict[str, list[str]]) -> pd.DataFrame:
+    """Crea columnas canónicas combinando variantes equivalentes por nombre."""
+    result = df.copy()
+    normalized_lookup: dict[str, list[str]] = {}
+    for col in result.columns:
+        normalized_lookup.setdefault(normalize_column_name(col), []).append(col)
+
+    for canonical_name, aliases in canonical_map.items():
+        candidate_cols: list[str] = []
+        for alias in aliases:
+            alias_key = normalize_column_name(alias)
+            candidate_cols.extend(normalized_lookup.get(alias_key, []))
+            for normalized_col, original_cols in normalized_lookup.items():
+                if normalized_col.endswith(alias_key) and normalized_col != alias_key:
+                    candidate_cols.extend(original_cols)
+        if not candidate_cols:
+            continue
+        unique_candidates = list(dict.fromkeys(candidate_cols))
+        result[canonical_name] = result[unique_candidates].bfill(axis=1).iloc[:, 0]
+
+    return result
+
+
+def parse_spanish_number(value):
+    """Convierte números en formato español a float."""
+    if pd.isna(value):
+        return np.nan
+    text = str(value).strip().replace("\xa0", "").replace(" ", "")
+    if not text or text == "..":
+        return np.nan
+    if "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1:
+        text = text.replace(".", "")
+    elif text.count(".") == 1:
+        left, right = text.split(".")
+        if right.isdigit() and len(right) == 3 and left.isdigit():
+            text = left + right
+    try:
+        return float(text)
+    except ValueError:
+        return np.nan
+@st.cache_data
+def load_home_data(year: str) -> pd.DataFrame:
+    """Carga y une federados.parquet + gasto.parquet para el año indicado.
+    federados usa comas ('asturias, principado de') y gasto usa paréntesis
+    ('asturias (principado de)'), por lo que se normaliza ccaa_limpia antes del join."""
+    EXCLUDED_CCAA = {'TOTAL', 'Sin territorializar', 'Ceuta', 'Melilla'}
+
+    # Mapeo ccaa_limpia de federados → clave equivalente en gasto
+    CCAA_KEY_MAP = {
+        'asturias, principado de':     'asturias (principado de)',
+        'balears, illes':              'balears (illes)',
+        'madrid, comunidad de':        'madrid (comunidad de)',
+        'murcia, regi\u00f3n de':           'murcia (regi\u00f3n de)',
+        'navarra, comunidad foral de': 'navarra (comunidad foral de)',
+        'rioja, la':                   'rioja (la)',
+    }
+
+    fed = coalesce_normalized_columns(
+        pd.read_parquet("data/processed/federados.parquet"),
+        {
+            "federacion": ["Federación", "Federacion"],
+            "comunidad_autonoma": ["Comunidad autónoma", "Comunidad autonoma"],
+            "periodo": ["periodo"],
+            "total_raw": ["Total"],
+        },
+    )
+    gas = coalesce_normalized_columns(
+        pd.read_parquet("data/processed/gasto.parquet"),
+        {
+            "indicador": ["Indicador"],
+            "comunidad_autonoma": ["Comunidad autónoma", "Comunidad autonoma"],
+            "periodo": ["periodo"],
+            "total_raw": ["Total"],
+        },
+    )
+    yr = int(year)
+
+    for df in (fed, gas):
+        df["periodo"] = pd.to_numeric(df["periodo"], errors="coerce")
+        df["Total_Num"] = df["total_raw"].map(parse_spanish_number)
+        for text_col in [col for col in ("federacion", "comunidad_autonoma", "indicador") if col in df.columns]:
+            df[text_col] = df[text_col].map(lambda x: repair_mojibake(x) if pd.notna(x) else x)
+        df["ccaa_limpia"] = df["comunidad_autonoma"].map(
+            lambda x: normalize(str(x)) if pd.notna(x) else x
+        )
+
+    # Licencias totales por CCAA (fuente federado_01, fila 'TOTAL' de federación)
+    fed_year = (
+        fed[
+            (fed['periodo'] == yr)
+            & (fed['archivo_origen'] == 'federado_01.csv')
+            & (fed['federacion'] == 'TOTAL')
+            & (~fed['comunidad_autonoma'].isin(EXCLUDED_CCAA))
+        ][['comunidad_autonoma', 'ccaa_limpia', 'Total_Num']]
+        .rename(columns={'Total_Num': 'Licencias_Federadas', 'comunidad_autonoma': 'CCAA'})
+        .copy()
+    )
+    # Normalizar ccaa_limpia de federados para que coincida con gasto
+    fed_year['ccaa_key'] = fed_year['ccaa_limpia'].map(
+        lambda x: CCAA_KEY_MAP.get(x, x)
+    )
+
+    # Gasto medio por hogar por CCAA (fuente gasto_03)
+    gas_year = (
+        gas[
+            (gas['periodo'] == yr)
+            & (gas['archivo_origen'] == 'gasto_03.csv')
+            & (gas['indicador'] == 'Gasto medio por hogar (Euros)')
+            & (gas['comunidad_autonoma'] != 'TOTAL')
+        ][['ccaa_limpia', 'Total_Num']]
+        .rename(columns={'Total_Num': 'Gasto_Promedio_Hogar_Eur', 'ccaa_limpia': 'ccaa_key'})
+    )
+
+    df = pd.merge(fed_year, gas_year, on='ccaa_key', how='inner')
+    df = df.drop(columns=['ccaa_limpia', 'ccaa_key'])
+    return df
 
 # Título y encabezado
 st.title(L['main_title'])
@@ -606,4 +746,3 @@ with st.sidebar:
             st.rerun()
     else:
         st.success(L['admin_label'])
-

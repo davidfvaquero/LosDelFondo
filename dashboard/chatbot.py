@@ -3,19 +3,44 @@
 from __future__ import annotations
 import unicodedata
 import pandas as pd
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
-# Manual list of offensive/toxic terms to supplement the AI classifier.
-# Includes common Spanish insults and slurs that may be missed by generic models.
-MANUAL_TOXIC_TERMS = [
-    "puta", "puto", "putos", "putas",
-    "hijo de puta", "hija de puta",
-    "inutil", "imbecil", "idiota", "gilipollas",
-    "capullo", "mamona", "mamon", "culo",
-    "mierda", "hostia", "joder", "coño",
-    "pendejo", "cabron", "cabrona", "zorra",
-    "fuck", "shit", "asshole", "bitch", "damn",
-]
+# Configuración central — cambia USE_REAL_MODELS en config.py para activar la IA real
+try:
+    from config import USE_REAL_MODELS, TOXICITY_MODEL_DIR, QWEN_MODEL_DIR, TOXICITY_THRESHOLD
+except ImportError:
+    USE_REAL_MODELS    = False
+    TOXICITY_MODEL_DIR = "models/toxicity-classifier"
+    QWEN_MODEL_DIR     = "models/qwen2.5-7b-deporte"
+    TOXICITY_THRESHOLD = 0.7
+# Diccionario de alias para normalizar nombres de CCAA
+ALIASES = {
+    "andalucia": "Andalucía",
+    "aragon": "Aragón",
+    "asturias": "Asturias, Principado de",
+    "baleares": "Balears, Illes",
+    "balears": "Balears, Illes",
+    "canarias": "Canarias",
+    "cantabria": "Cantabria",
+    "leon": "Castilla y León",
+    "mancha": "Castilla - La Mancha",
+    "cataluña": "Cataluña",
+    "catalunya": "Cataluña",
+    "catalonia": "Cataluña",
+    "valencia": "Comunitat Valenciana",
+    "valenciana": "Comunitat Valenciana",
+    "extremadura": "Extremadura",
+    "galicia": "Galicia",
+    "madrid": "Madrid, Comunidad de",
+    "murcia": "Murcia, Región de",
+    "navarra": "Navarra, Comunidad Foral de",
+    "vasco": "País Vasco",
+    "rioja": "Rioja, La",
+}
+
+# Patrones de búsqueda para lógica determinista
+MAX_SPEND_PATTERNS = ["gasta mas", "maximo gasto", "most spending", "highest spending", "mas dinero"]
+MIN_SPEND_PATTERNS = ["gasta menos", "minimo gasto", "least spending", "lowest spending"]
+MAX_LICENSE_PATTERNS = ["mas licencias", "most licenses", "mas federados", "mas socios"]
 
 def normalize(text: str) -> str:
     """Retorna texto en minúsculas y sin acentos."""
