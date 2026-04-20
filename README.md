@@ -31,6 +31,102 @@ Para activarlo en GitHub:
 
 Sin ese secret, el workflow de deploy fallara de forma explicita para que no pase desapercibido.
 
+## CD hacia AWS EC2 con GitHub Actions
+
+Si quieres desplegar en una instancia EC2 en vez de Render, el repo incluye ahora:
+
+- el workflow [`.github/workflows/ec2-deploy.yml`](/home/gordolinus/projects/LosDelFondo/.github/workflows/ec2-deploy.yml)
+- el script remoto [`scripts/deploy_ec2.sh`](/home/gordolinus/projects/LosDelFondo/scripts/deploy_ec2.sh)
+
+El flujo es:
+
+1. Haces `push` o merge a `main`, `dev` o `api`.
+2. GitHub ejecuta la CI.
+3. Si la CI termina bien, GitHub abre una conexion SSH con la EC2.
+4. La EC2 hace `git fetch`, actualiza el repo, instala dependencias, regenera datos y reinicia el servicio.
+
+### Environments y ramas
+
+Configura tres `Environments` en GitHub:
+
+- `Production` para la rama `main`
+- `staging` para la rama `dev`
+- `api` para la rama `api`
+
+El workflow selecciona automaticamente el environment segun la rama:
+
+- `main` -> `Production`
+- `dev` -> `staging`
+- `api` -> `api`
+
+En cada environment, limita `Deployment branches and tags` a su rama correspondiente.
+
+### Secrets que debes crear en GitHub
+
+En `Settings > Environments`, entra en cada environment y crea estos mismos secrets, pero con los valores de la EC2 correspondiente:
+
+- `EC2_HOST`: IP publica o DNS de la instancia.
+- `EC2_USER`: usuario SSH, por ejemplo `ubuntu`.
+- `EC2_SSH_PRIVATE_KEY`: clave privada que GitHub Actions usara para entrar por SSH.
+- `EC2_KNOWN_HOSTS`: salida de `ssh-keyscan -H <tu-host>`.
+- `EC2_APP_DIR`: ruta absoluta donde esta clonado el repo en la EC2, por ejemplo `/opt/losdelfondo`.
+- `EC2_SYSTEMD_SERVICE`: nombre del servicio `systemd` que arranca Streamlit, por ejemplo `losdelfondo`.
+
+Ejemplo:
+
+- environment `Production`: secretos de la EC2 de produccion
+- environment `staging`: secretos de la EC2 de pruebas
+- environment `api`: secretos de la EC2 donde vive la API
+
+### Preparacion unica en la EC2
+
+1. Clona el repo en una ruta fija, por ejemplo `/opt/losdelfondo`.
+2. Asegurate de que el usuario de `EC2_USER` puede ejecutar `sudo systemctl restart <servicio>` sin pedir password.
+3. Crea el servicio `systemd`.
+
+Ejemplo de unidad `systemd` en `/etc/systemd/system/losdelfondo.service`:
+
+```ini
+[Unit]
+Description=LosDelFondo Streamlit app
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/losdelfondo
+Environment="PATH=/opt/losdelfondo/.venv/bin"
+ExecStart=/opt/losdelfondo/.venv/bin/streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Luego en la EC2:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable losdelfondo
+sudo systemctl start losdelfondo
+```
+
+### Comandos utiles
+
+Para generar `EC2_KNOWN_HOSTS` desde tu maquina local:
+
+```bash
+ssh-keyscan -H TU_HOST_EC2
+```
+
+Para permitir reinicio sin password al usuario `ubuntu`, abre `sudo visudo` y anade algo como:
+
+```text
+ubuntu ALL=NOPASSWD:/bin/systemctl restart losdelfondo,/bin/systemctl status losdelfondo
+```
+
+Si prefieres otro servicio o usuario, ajusta el nombre tanto en la instancia como en el secret `EC2_SYSTEMD_SERVICE`.
+
 
 ## Como lanzar la web en local
 
