@@ -13,14 +13,15 @@ Todo lo demás sigue funcionando igual.
 
 # ─── Modelos de IA ─────────────────────────────────────────────────────────
 # Cambia a True cuando los modelos estén entrenados y disponibles
-USE_REAL_MODELS: bool = False
+USE_REAL_MODELS: bool = True
 
 # Rutas locales (modelos guardados en disco tras el entrenamiento)
-QWEN_MODEL_DIR:     str = "models/qwen2.5-7b-deporte"
-TOXICITY_MODEL_DIR: str = "models/toxicity-classifier"
+QWEN_MODEL_DIR:     str = "models/QwenBase"
+QWEN_ADAPTER_DIR:   str = "models/QwenDeporteData/qwen2.5-finetuned/checkpoint-1443"
+TOXICITY_MODEL_DIR: str = "models/antiToxicidad/toxicity-classifier"
 
 # Umbral de toxicidad (0.0-1.0). Más alto = menos falsos positivos.
-TOXICITY_THRESHOLD: float = 0.7
+TOXICITY_THRESHOLD: float = 0.82
 
 # ─── Datos ─────────────────────────────────────────────────────────────────
 PROCESSED_DIR: str = "data/processed"

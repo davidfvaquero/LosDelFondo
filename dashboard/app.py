@@ -638,14 +638,15 @@ with tab2:
 
                     # Try AI model
                     try:
-                        toxic_clf, llm_pipeline = load_models()
-                        is_toxic, _ = check_toxicity(prompt, toxic_clf)
-                        if is_toxic:
-                            assistant_response = blocked_msg
-                        else:
-                            assistant_response = generate_llm_response(
-                                prompt, df_rag, llm_pipeline, st.session_state.lang
-                            )
+                        with st.spinner("🤖 Generando respuesta (esto puede tardar unos segundos)..." if st.session_state.lang == "ES" else "🤖 Generating response (this might take a few seconds)..."):
+                            toxic_clf, llm_pipeline = load_models()
+                            is_toxic, _ = check_toxicity(prompt, toxic_clf)
+                            if is_toxic:
+                                assistant_response = blocked_msg
+                            else:
+                                assistant_response = generate_llm_response(
+                                    prompt, df_rag, llm_pipeline, st.session_state.lang
+                                )
                     except Exception as ai_err:
                         # Show the real error so we can diagnose it
                         assistant_response = f"❌ Error al cargar el modelo IA: {type(ai_err).__name__}: {ai_err}"

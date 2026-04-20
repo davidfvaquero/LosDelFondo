@@ -3,15 +3,25 @@
 from __future__ import annotations
 import unicodedata
 import pandas as pd
+import streamlit as st
+import torch
+import os
 
-# Configuración central — cambia USE_REAL_MODELS en config.py para activar la IA real
+import sys
+
+# Agregar la raíz del proyecto al sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Configuración central
 try:
-    from config import USE_REAL_MODELS, TOXICITY_MODEL_DIR, QWEN_MODEL_DIR, TOXICITY_THRESHOLD
+    from config import USE_REAL_MODELS, TOXICITY_MODEL_DIR, QWEN_MODEL_DIR, QWEN_ADAPTER_DIR, TOXICITY_THRESHOLD
 except ImportError:
-    USE_REAL_MODELS    = False
-    TOXICITY_MODEL_DIR = "models/toxicity-classifier"
-    QWEN_MODEL_DIR     = "models/qwen2.5-7b-deporte"
-    TOXICITY_THRESHOLD = 0.7
+    USE_REAL_MODELS    = True
+    TOXICITY_MODEL_DIR = "models/antiToxicidad/toxicity-classifier"
+    QWEN_MODEL_DIR     = "models/QwenBase"
+    QWEN_ADAPTER_DIR   = "models/QwenDeporteData/qwen2.5-finetuned/checkpoint-1443"
+    TOXICITY_THRESHOLD = 0.82
+
 # Diccionario de alias para normalizar nombres de CCAA
 ALIASES = {
     "andalucia": "Andalucía",
@@ -59,31 +69,102 @@ def prepare_assistant_data(df: pd.DataFrame) -> pd.DataFrame:
         }
     )
 
-# --- NUEVOS MÉTODOS REQUERIDOS POR APP.PY ---
-
+# --- CARGA DE MODELOS CON CACHÉ ---
+@st.cache_resource
 def load_models():
     """
-    Carga los modelos de IA. 
-    Retorna (None, None) por ahora para evitar errores de dependencias pesadas.
+    Carga los modelos de IA utilizando memoria caché para que sobrevivan a los recargos de página.
     """
-    toxic_clf = None 
-    llm_pipeline = None
-    return toxic_clf, llm_pipeline
+    if not USE_REAL_MODELS:
+        return None, None
 
+    try:
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM
+        from peft import PeftModel
+        
+        # 1. Cargar modelo de toxicidad
+        toxic_tokenizer = AutoTokenizer.from_pretrained(TOXICITY_MODEL_DIR)
+        toxic_model = AutoModelForSequenceClassification.from_pretrained(TOXICITY_MODEL_DIR)
+        toxic_model.eval()
+        toxic_clf = (toxic_tokenizer, toxic_model)
+        
+        # 2. Cargar modelo Qwen base y aplicar adaptador LoRA
+        base_tokenizer = AutoTokenizer.from_pretrained(QWEN_MODEL_DIR)
+        base_model = AutoModelForCausalLM.from_pretrained(
+            QWEN_MODEL_DIR,
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
+        base_model.eval()
+        qwen_finetuned = PeftModel.from_pretrained(base_model, QWEN_ADAPTER_DIR)
+        llm_pipeline = (base_tokenizer, qwen_finetuned)
+        
+        return toxic_clf, llm_pipeline
+    except Exception as e:
+        print(f"Error cargando modelos: {e}")
+        # Retorna el error para diagnosticar de inmediato desde la GUI
+        raise e
+
+# --- INTEGRACIÓN ML (TOXICIDAD) ---
 def check_toxicity(text: str, classifier=None):
     """
-    Verifica si el texto es tóxico. 
-    Retorna una tupla (is_toxic, score).
+    Verifica si el texto es tóxico con base en TOXICITY_THRESHOLD (0.82)
     """
-    # Lógica por defecto: no es tóxico si el clasificador es None
-    return False, 0.0
+    if classifier is None:
+        return False, 0.0
 
-def generate_llm_response(prompt: str, df: pd.DataFrame, pipeline, lang: str) -> str:
+    try:
+        toxic_tokenizer, toxic_model = classifier
+        inputs = toxic_tokenizer(text, return_tensors="pt")
+        with torch.no_grad():
+            outputs = toxic_model(**inputs)
+            predictions = torch.softmax(outputs.logits, dim=-1)
+            
+        toxic_prob = predictions[0][1].item()
+        is_toxic = toxic_prob > TOXICITY_THRESHOLD
+        return is_toxic, toxic_prob
+    except Exception as e:
+        print(f"Error en check_toxicity: {e}")
+        return False, 0.0
+
+# --- INTEGRACIÓN ML (QWEN) ---
+def generate_llm_response(prompt: str, df: pd.DataFrame, pipeline=None, lang: str="ES") -> str:
     """
-    Punto de entrada que conecta el prompt con la lógica de datos.
-    Como no hay pipeline de LLM real cargado, usa la lógica determinista.
+    Punto de entrada que conecta el prompt con la lógica de datos real o al LLM Finetuned con RAG.
     """
-    # Definición interna de etiquetas para evitar fallos de importación
+    if pipeline is None:
+        # Fallback a la lógica de RAG simple por si fallan los modelos
+        return _fallback_generate_chat_response(prompt, df, lang)
+    
+    qwen_tokenizer, qwen_model = pipeline
+    
+    system_prompt = "Eres un asistente experto en deportes. Responde de forma directa, breve y profesional. Asegúrate de terminar la respuesta con un punto."
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt}
+    ]
+    
+    text = qwen_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = qwen_tokenizer(text, return_tensors="pt").to(qwen_model.device)
+    
+    with torch.no_grad():
+        output_ids = qwen_model.generate(
+            **inputs, 
+            max_new_tokens=200, 
+            do_sample=True,
+            temperature=0.3,
+            top_p=0.9,
+            repetition_penalty=1.2,
+            pad_token_id=qwen_tokenizer.eos_token_id
+        )
+        response_ids = output_ids[0][len(inputs.input_ids[0]):]
+        response = qwen_tokenizer.decode(response_ids, skip_special_tokens=True)
+        
+    return response if response.strip() else "Lo siento, no sé cómo responder a eso."
+
+# --- LÓGICA DE RESPUESTA (FALLBACK SI MODELOS ESTÁN APAGADOS) ---
+def _fallback_generate_chat_response(prompt: str, df: pd.DataFrame, lang: str) -> str:
     labels_map = {
         "ES": {
             "chat_max_spend": "🔍 La CCAA que más gasta es {region} con {value} €.",
@@ -103,13 +184,8 @@ def generate_llm_response(prompt: str, df: pd.DataFrame, pipeline, lang: str) ->
         }
     }
     
-    selected_labels = labels_map.get(lang, labels_map["ES"])
-    return generate_chat_response(prompt, df, selected_labels)
-
-# --- LÓGICA DE RESPUESTA ---
-
-def generate_chat_response(prompt: str, df: pd.DataFrame, labels: dict[str, str]) -> str:
-    """Retorna una respuesta basada en reglas filtrando el DataFrame."""
+    labels = labels_map.get(lang, labels_map["ES"])
+    
     if df.empty:
         return labels["chat_error_data"]
 
@@ -129,7 +205,6 @@ def generate_chat_response(prompt: str, df: pd.DataFrame, labels: dict[str, str]
 
     for alias, official_name in ALIASES.items():
         if alias in prompt_normalized:
-            # Buscamos la fila que coincida con el nombre oficial
             match = df[df["CCAA"] == official_name]
             if not match.empty:
                 row = match.iloc[0]
@@ -139,7 +214,6 @@ def generate_chat_response(prompt: str, df: pd.DataFrame, labels: dict[str, str]
                     lic=int(row["Licencias Federadas"])
                 )
 
-    # Respuesta por defecto si no detecta patrón
     fallback_row = df.sample(1, random_state=0).iloc[0]
     interesting_fact = labels["chat_single_region"].format(
         region=fallback_row["CCAA"],

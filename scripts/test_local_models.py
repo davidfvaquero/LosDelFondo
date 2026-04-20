@@ -4,13 +4,14 @@ import sys
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM
 from peft import PeftModel
 
-# Forzar codificación UTF-8 para evitar errores con tildes en Windows
-if sys.stdout.encoding != 'utf-8':
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
-        # En algunas versiones antiguas de Python o entornos específicos
-        pass
+# Forzar codificación UTF-8 robusta para Windows
+if sys.platform == 'win32':
+    os.system('chcp 65001 > nul') # Cambia el code page de la terminal a UTF-8
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except AttributeError:
+    pass
 
 def test_toxicity_model(models_dir):
     print("\n--- Testing Toxicity Model (Threshold Adjusted to 85%) ---")
@@ -25,10 +26,14 @@ def test_toxicity_model(models_dir):
         "No me gusta cómo trabajas, podrías hacerlo mejor.",
         "Eres un completo inútil y no sirves para nada.",
         "Cállate la boca de una vez, nadie te ha preguntado.",
-        "Que tengas un excelente día y muchas gracias por todo."
+        "¡Qué bestialidad de partido, ha sido una maldita locura, increíble!",
+        "En mi opinión, tu análisis es bastante pobre y carece de rigor deportivo.",
+        "Vaya genio estás hecho, seguro que te han dado un premio por tremenda estupidez.",
+        "El árbitro estuvo ciego todo el partido, es un sinvergüenza vendido.",
+        "No comparto tu visión táctica, creo que el entrenador se equivocó completamente."
     ]
     
-    threshold = 0.75 # Umbral balanceado (ajustado de 85% para captar insultos claros)
+    threshold = 0.82 # Umbral muy estricto para evitar falsos positivos con frases como "maravillosa"
     
     for text in test_texts:
         inputs = tokenizer(text, return_tensors="pt")
@@ -60,11 +65,11 @@ def test_qwen_model(models_dir):
     model = PeftModel.from_pretrained(base_model, adapter_path)
     
     questions = [
-        "¿Qué porcentaje de la población practica fútbol en España?",
-        "¿Cuáles son los beneficios del deporte federado?",
-        "Dime un resumen breve del impacto del deporte en la economía española.",
-        "¿Cómo afectó el COVID-19 a la práctica deportiva en España según los datos?",
-        "¿Cuál es el deporte con mayor número de seguidores oficiales?"
+        "Teniendo en cuenta el crecimiento del gasto en deporte hasta 2019, ¿cómo crees que afectó la pandemia de COVID-19 tanto a esos ingresos como al número de federados?",
+        "Si observamos la distribución por sexos, ¿qué indican los datos sobre la brecha en el deporte federado y en la práctica general?",
+        "¿Es cierto que el tenis es el deporte con más federados y el que más licencias genera en España, muy por encima del fútbol o el baloncesto?",
+        "Dime 3 ventajas concretas y basadas en datos de practicar deporte de forma federada frente a la práctica deportiva libre.",
+        "Realiza un análisis cruzado: ¿Cómo se relaciona el gasto público por habitante con la evolución del número de clubes deportivos en los últimos 5 años registrados?"
     ]
     
     for q in questions:
