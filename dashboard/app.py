@@ -421,26 +421,14 @@ with st.sidebar:
     
     st.markdown(f"### {L['sidebar_filters']}")
     
-    # Callbacks para actualización instantánea
-    def on_year_change():
-        st.session_state.sel_year = st.session_state.year_selector
-        
-    def on_territory_change():
-        val = st.session_state.territory_selector
-        if val == L['all_ccaa']:
-            st.session_state.sel_territory = "Todas las CCAA"
-        else:
-            st.session_state.sel_territory = val
-
     # Filtro de Año
     year_options = [str(y) for y in range(2023, 2005, -1)]
-    st.selectbox(
+    selected_year = st.selectbox(
         L['filter_year'],
         year_options,
-        index=year_options.index(st.session_state.sel_year) if st.session_state.sel_year in year_options else 0,
-        key='year_selector',
-        on_change=on_year_change
+        index=year_options.index(st.session_state.sel_year) if st.session_state.sel_year in year_options else 0
     )
+    st.session_state.sel_year = selected_year
 
     # Filtro de Territorio
     territory_options = [
@@ -456,13 +444,16 @@ with st.sidebar:
     current_territory = st.session_state.sel_territory
     display_territory = L['all_ccaa'] if current_territory == "Todas las CCAA" else current_territory
     
-    st.selectbox(
+    selected_territory = st.selectbox(
         L['filter_territory'], 
         territory_options, 
-        index=territory_options.index(display_territory) if display_territory in territory_options else 0,
-        key='territory_selector',
-        on_change=on_territory_change
+        index=territory_options.index(display_territory) if display_territory in territory_options else 0
     )
+    
+    if selected_territory == L['all_ccaa']:
+        st.session_state.sel_territory = "Todas las CCAA"
+    else:
+        st.session_state.sel_territory = selected_territory
 
     st.divider()
     
