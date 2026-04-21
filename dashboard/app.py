@@ -404,6 +404,115 @@ def apply_plotly_style(fig):
 # Eliminadas funciones de carga local (mojibake, normalize_column, build_home_data) 
 # porque ahora la lógica reside en la API unificada.
 
+# Sidebar y personalización (Definidos al inicio para que los filtros afecten al resto del script)
+with st.sidebar:
+    st.image(icon_path, width=100)
+    st.markdown("## DEPORTEData")
+    st.divider()
+    
+    st.markdown(f"### {L['sidebar_prefs']}")
+    
+    # Selector de Idioma
+    lang = st.selectbox(
+        L['sidebar_lang'], 
+        ["ES", "EN"], 
+        index=0 if st.session_state.lang == "ES" else 1,
+        format_func=lambda x: "🇪🇸 Español" if x == "ES" else "🇺🇸 English"
+    )
+    if lang != st.session_state.lang:
+        st.session_state.lang = lang
+        # Refrescar saludo del chatbot al cambiar idioma
+        st.session_state.messages = [{"role": "assistant", "content": LANGUAGES[lang]['chat_hi']}]
+        st.rerun()
+
+    theme = st.radio(L['sidebar_theme'], ["Oscuro", "Claro"] if st.session_state.lang == "ES" else ["Dark", "Light"], index=0 if st.session_state.theme in ["Oscuro", "Dark"] else 1, horizontal=True)
+    theme_val = "Oscuro" if theme in ["Oscuro", "Dark"] else "Claro"
+    if theme_val != st.session_state.theme:
+        st.session_state.theme = theme_val
+        st.rerun()
+
+    st.divider()
+    
+    st.markdown(f"### {L['sidebar_filters']}")
+    
+    # Callbacks para actualización instantánea
+    def on_year_change():
+        st.session_state.sel_year = st.session_state.year_selector
+        
+    def on_territory_change():
+        val = st.session_state.territory_selector
+        if val == L['all_ccaa']:
+            st.session_state.sel_territory = "Todas las CCAA"
+        else:
+            st.session_state.sel_territory = val
+
+    # Filtro de Año
+    year_options = [str(y) for y in range(2023, 2005, -1)]
+    st.selectbox(
+        L['filter_year'],
+        year_options,
+        index=year_options.index(st.session_state.sel_year) if st.session_state.sel_year in year_options else 0,
+        key='year_selector',
+        on_change=on_year_change
+    )
+
+    # Filtro de Territorio
+    territory_options = [
+        L['all_ccaa'],
+        "Andalucía", "Aragón", "Asturias, Principado de", "Balears, Illes",
+        "Canarias", "Cantabria", "Castilla y León", "Castilla-La Mancha",
+        "Cataluña", "Comunitat Valenciana", "Extremadura", "Galicia",
+        "Madrid, Comunidad de", "Murcia, Región de", "Navarra, Comunidad Foral de",
+        "País Vasco", "Rioja, La",
+    ]
+    
+    # Determinar el índice actual basado en el estado (traduciendo "Todas las CCAA" si es necesario)
+    current_territory = st.session_state.sel_territory
+    display_territory = L['all_ccaa'] if current_territory == "Todas las CCAA" else current_territory
+    
+    st.selectbox(
+        L['filter_territory'], 
+        territory_options, 
+        index=territory_options.index(display_territory) if display_territory in territory_options else 0,
+        key='territory_selector',
+        on_change=on_territory_change
+    )
+
+    st.divider()
+    
+    if not st.session_state.is_admin:
+        if st.button(L['login_admin']):
+            st.session_state.show_login = True
+            st.rerun()
+    else:
+        st.success(L['admin_label'])
+
+# --- Títulos y Pestañas ---
+st.title(L['main_title'])
+st.markdown(f"### {L['main_subtitle']}")
+
+# Pantalla de login
+if st.session_state.show_login:
+    st.header(L['login_header'])
+    with st.form("login_form"):
+        username = st.text_input(L['login_user'])
+        password = st.text_input(L['login_pass'], type="password")
+        submit = st.form_submit_button(L['login_btn'])
+        if submit:
+            # Login contra la API para obtener Token
+            login_resp = requests.post(
+                f"{API_URL}/api/v1/token",
+                data={"username": username, "password": password}
+            )
+            if login_resp.status_code == 200:
+                data = login_resp.json()
+                st.session_state.is_admin = True
+                st.session_state.auth_token = data["access_token"]
+                st.session_state.show_login = False
+                st.rerun()
+            else:
+                st.error(L['login_err'])
+    st.stop()
 # Definición de pestañas
 tabs_list = [L['tab_home'], L['tab_ai']]
 if st.session_state.is_admin:
@@ -569,112 +678,3 @@ if st.session_state.is_admin:
         else:
             st.error("No se pudo conectar con el servicio administrativo de la API.")
 
-# Sidebar y personalización (Definidos al inicio para que los filtros afecten al resto del script)
-with st.sidebar:
-    st.image(icon_path, width=100)
-    st.markdown("## DEPORTEData")
-    st.divider()
-    
-    st.markdown(f"### {L['sidebar_prefs']}")
-    
-    # Selector de Idioma
-    lang = st.selectbox(
-        L['sidebar_lang'], 
-        ["ES", "EN"], 
-        index=0 if st.session_state.lang == "ES" else 1,
-        format_func=lambda x: "🇪🇸 Español" if x == "ES" else "🇺🇸 English"
-    )
-    if lang != st.session_state.lang:
-        st.session_state.lang = lang
-        # Refrescar saludo del chatbot al cambiar idioma
-        st.session_state.messages = [{"role": "assistant", "content": LANGUAGES[lang]['chat_hi']}]
-        st.rerun()
-
-    theme = st.radio(L['sidebar_theme'], ["Oscuro", "Claro"] if st.session_state.lang == "ES" else ["Dark", "Light"], index=0 if st.session_state.theme in ["Oscuro", "Dark"] else 1, horizontal=True)
-    theme_val = "Oscuro" if theme in ["Oscuro", "Dark"] else "Claro"
-    if theme_val != st.session_state.theme:
-        st.session_state.theme = theme_val
-        st.rerun()
-
-    st.divider()
-    
-    st.markdown(f"### {L['sidebar_filters']}")
-    
-    # Callbacks para actualización instantánea
-    def on_year_change():
-        st.session_state.sel_year = st.session_state.year_selector
-        
-    def on_territory_change():
-        val = st.session_state.territory_selector
-        if val == L['all_ccaa']:
-            st.session_state.sel_territory = "Todas las CCAA"
-        else:
-            st.session_state.sel_territory = val
-
-    # Filtro de Año
-    year_options = [str(y) for y in range(2023, 2005, -1)]
-    st.selectbox(
-        L['filter_year'],
-        year_options,
-        index=year_options.index(st.session_state.sel_year) if st.session_state.sel_year in year_options else 0,
-        key='year_selector',
-        on_change=on_year_change
-    )
-
-    # Filtro de Territorio
-    territory_options = [
-        L['all_ccaa'],
-        "Andalucía", "Aragón", "Asturias, Principado de", "Balears, Illes",
-        "Canarias", "Cantabria", "Castilla y León", "Castilla-La Mancha",
-        "Cataluña", "Comunitat Valenciana", "Extremadura", "Galicia",
-        "Madrid, Comunidad de", "Murcia, Región de", "Navarra, Comunidad Foral de",
-        "País Vasco", "Rioja, La",
-    ]
-    
-    # Determinar el índice actual basado en el estado (traduciendo "Todas las CCAA" si es necesario)
-    current_territory = st.session_state.sel_territory
-    display_territory = L['all_ccaa'] if current_territory == "Todas las CCAA" else current_territory
-    
-    st.selectbox(
-        L['filter_territory'], 
-        territory_options, 
-        index=territory_options.index(display_territory) if display_territory in territory_options else 0,
-        key='territory_selector',
-        on_change=on_territory_change
-    )
-
-    st.divider()
-    
-    if not st.session_state.is_admin:
-        if st.button(L['login_admin']):
-            st.session_state.show_login = True
-            st.rerun()
-    else:
-        st.success(L['admin_label'])
-
-# --- Títulos y Pestañas ---
-st.title(L['main_title'])
-st.markdown(f"### {L['main_subtitle']}")
-
-# Pantalla de login
-if st.session_state.show_login:
-    st.header(L['login_header'])
-    with st.form("login_form"):
-        username = st.text_input(L['login_user'])
-        password = st.text_input(L['login_pass'], type="password")
-        submit = st.form_submit_button(L['login_btn'])
-        if submit:
-            # Login contra la API para obtener Token
-            login_resp = requests.post(
-                f"{API_URL}/api/v1/token",
-                data={"username": username, "password": password}
-            )
-            if login_resp.status_code == 200:
-                data = login_resp.json()
-                st.session_state.is_admin = True
-                st.session_state.auth_token = data["access_token"]
-                st.session_state.show_login = False
-                st.rerun()
-            else:
-                st.error(L['login_err'])
-    st.stop()
