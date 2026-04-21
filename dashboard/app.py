@@ -68,7 +68,7 @@ if 'sel_territory_input' not in st.session_state:
 # Diccionario de Traducciones
 LANGUAGES = {
     'ES': {
-        'page_title': "DEPORTEData | Reto A",
+        'page_title': "DEPORTEData ME CAGO EN LA PUTA| Reto A",
         'sidebar_prefs': "Preferencias",
         'sidebar_theme': "Modo Visualización",
         'sidebar_lang': "Idioma",
