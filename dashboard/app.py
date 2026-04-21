@@ -1,23 +1,9 @@
 import streamlit as st
 import time
 import pandas as pd
-import numpy as np
 import plotly.express as px
 
-
-try:
-    from dashboard.chatbot import (
-        prepare_assistant_data,
-        check_toxicity, load_models, generate_llm_response,
-    )
-except ImportError:
-    from chatbot import (
-        prepare_assistant_data,
-        check_toxicity, load_models, generate_llm_response,
-    )
-
 import requests
-import json
 
 API_URL = "http://localhost:8000"
 

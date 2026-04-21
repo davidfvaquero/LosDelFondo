@@ -300,12 +300,11 @@ def build_home_data(year: int) -> pd.DataFrame:
     EXCLUDED_KEYS = {normalize_for_match(c) for c in EXCLUDED_CCAA_RAW}
 
     # 1. Cargar y filtrar por año inmediatamente para reducir memoria
-    yr_str = str(year)
     fed_raw = pd.read_parquet(fed_path)
-    fed = federados_filt = fed_raw[pd.to_numeric(fed_raw['periodo'], errors='coerce') == int(year)].copy()
+    fed = fed_raw[pd.to_numeric(fed_raw['periodo'], errors='coerce') == int(year)].copy()
     
     gas_raw = pd.read_parquet(gas_path)
-    gas = gas_filt = gas_raw[pd.to_numeric(gas_raw['periodo'], errors='coerce') == int(year)].copy()
+    gas = gas_raw[pd.to_numeric(gas_raw['periodo'], errors='coerce') == int(year)].copy()
 
     # 2. Coalescer columnas solo en el subconjunto
     fed = coalesce_normalized_columns(fed, {
