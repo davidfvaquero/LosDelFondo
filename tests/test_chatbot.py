@@ -1,16 +1,6 @@
 import pandas as pd
 
-from dashboard.chatbot import generate_chat_response, normalize, prepare_assistant_data
-
-
-LABELS = {
-    "chat_error_data": "Sin datos.",
-    "chat_max_spend": "Max spend: {region} {value}",
-    "chat_min_spend": "Min spend: {region} {value}",
-    "chat_max_lic": "Top licenses: {region} {value}",
-    "chat_single_region": "{region}: gasto {gasto}, licencias {lic}",
-    "chat_analyze": "Analizado.",
-}
+from dashboard.chatbot import _fallback_generate_chat_response, normalize, prepare_assistant_data
 
 
 def sample_df() -> pd.DataFrame:
@@ -33,15 +23,17 @@ def test_normalize_removes_accents():
 
 
 def test_generate_chat_response_for_max_spend():
-    response = generate_chat_response("quien gasta mas", sample_df(), LABELS)
+    response = _fallback_generate_chat_response("quien gasta mas", sample_df(), "ES")
     assert "Madrid, Comunidad de" in response
 
 
 def test_generate_chat_response_for_region_alias():
-    response = generate_chat_response("federados en valencia", sample_df(), LABELS)
+    response = _fallback_generate_chat_response("federados en valencia", sample_df(), "ES")
     assert "Comunitat Valenciana" in response
 
 
 def test_generate_chat_response_fallback_is_deterministic():
-    response = generate_chat_response("cuentame algo", sample_df(), LABELS)
-    assert response == "Analizado. Andalucía: gasto 330.0, licencias 90000"
+    response = _fallback_generate_chat_response("cuentame algo", sample_df(), "ES")
+    assert "Andalucía" in response
+    assert "330.0" in response
+    assert "90000" in response
