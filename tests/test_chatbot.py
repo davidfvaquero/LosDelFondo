@@ -2,7 +2,7 @@ import pandas as pd
 
 from dashboard.chatbot import _fallback_generate_chat_response, normalize, prepare_assistant_data
 
-
+#a
 def sample_df() -> pd.DataFrame:
     raw_df = pd.DataFrame(
         {
