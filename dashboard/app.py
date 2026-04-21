@@ -30,6 +30,15 @@ def post_api_data(endpoint, json_data):
 
 import unicodedata
 
+def get_client_ip():
+    try:
+        if hasattr(st, "context") and hasattr(st.context, "headers"):
+            if "X-Forwarded-For" in st.context.headers:
+                return st.context.headers["X-Forwarded-For"].split(",")[0]
+    except:
+        pass
+    return "127.0.0.1"
+
 def normalize(text: str) -> str:
     """Lowercase without accents."""
     return "".join(
@@ -593,7 +602,8 @@ with tab2:
                 # ── Layer 2: Llamada a la API ──────────────────────────
                 json_chat = {
                     "prompt": prompt,
-                    "lang": st.session_state.lang
+                    "lang": st.session_state.lang,
+                    "user_ip": get_client_ip()
                 }
                 api_resp = post_api_data("/chat", json_chat)
                 
@@ -652,6 +662,19 @@ if st.session_state.is_admin:
                 st.markdown(f"**{L['admin_system_load']}**")
                 fig_telemetry = px.area(admin_data["system_load"], color_discrete_sequence=[accent_color])
                 st.plotly_chart(apply_plotly_style(fig_telemetry), use_container_width=True)
+            st.divider()
+            st.subheader("📝 Historial de Consultas de IA (Log de Archivo)")
+            chat_logs = get_api_data("/api/v1/admin/chat_logs", auth_token=st.session_state.auth_token)
+            if chat_logs:
+                df_logs = pd.DataFrame(chat_logs)
+                if not df_logs.empty:
+                    df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp']).dt.strftime("%Y-%m-%d %H:%M:%S")
+                    st.dataframe(df_logs, use_container_width=True)
+                else:
+                    st.info("No hay registros de chat guardados todavía.")
+            else:
+                st.info("No hay registros de chat o no se pudieron cargar desde el backend.")
+                
         else:
             st.error("No se pudo conectar con el servicio administrativo de la API.")
 
