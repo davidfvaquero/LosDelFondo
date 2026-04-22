@@ -1,21 +1,10 @@
 name: EC2 Deploy
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types:
-      - completed
   workflow_dispatch:
 
 jobs:
   prepare:
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'pull_request' &&
-        contains(fromJson('["main","dev","api"]'), github.event.workflow_run.pull_requests[0].base.ref)
-      )
     runs-on: ubuntu-latest
     outputs:
       branch: ${{ steps.select.outputs.branch }}
@@ -25,13 +14,8 @@ jobs:
       - name: Select branch and environment
         id: select
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            branch="${{ github.ref_name }}"
-            target_branch="${{ github.ref_name }}"
-          else
-            branch="${{ github.event.workflow_run.head_branch }}"
-            target_branch="${{ github.event.workflow_run.pull_requests[0].base.ref }}"
-          fi
+          branch="${{ github.ref_name }}"
+          target_branch="${{ github.ref_name }}"
 
           case "$target_branch" in
             main)
