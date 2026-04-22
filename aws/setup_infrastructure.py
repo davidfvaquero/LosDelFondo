@@ -243,25 +243,28 @@ systemctl start docker
 # Login a Docker Hub
 echo "{DOCKER_HUB_TOKEN}" | docker login -u {DOCKER_HUB_USER} --password-stdin
 
+# Clone repository (branch dev)
+mkdir -p /home/ec2-user/app
+git clone -b deploy/aws-infrastructure https://github.com/davidfvaquero/LosDelFondo.git /home/ec2-user/app
+chown -R ec2-user:ec2-user /home/ec2-user/app
+
 # Crear .env con variables del entorno
-cat > /home/ec2-user/.env << 'ENVEOF'
+cat > /home/ec2-user/app/.env << 'ENVEOF'
 S3_BUCKET={S3_BUCKET}
 AWS_DEFAULT_REGION={REGION}
+AWS_ACCESS_KEY_ID={os.environ.get("AWS_ACCESS_KEY_ID", "")}
+AWS_SECRET_ACCESS_KEY={os.environ.get("AWS_SECRET_ACCESS_KEY", "")}
+AWS_SESSION_TOKEN={os.environ.get("AWS_SESSION_TOKEN", "")}
 DB_HOST={db_endpoint}
 DB_NAME={DB_NAME}
 DB_USER={DB_USER}
 DB_PASSWORD={DB_PASSWORD}
 ENVEOF
 
-# Descargar docker-compose.yml desde el repo de GitHub
-mkdir -p /home/ec2-user/app
-curl -o /home/ec2-user/app/docker-compose.yml \
-  https://raw.githubusercontent.com/davidfvaquero/LosDelFondo/dev/docker-compose.yml
-
-# Arrancar servicios
+# Arrancar servicios (build nativo en EC2)
 cd /home/ec2-user/app
-docker compose --env-file /home/ec2-user/.env pull
-docker compose --env-file /home/ec2-user/.env up -d
+docker compose build
+docker compose up -d
 
 # Configurar reinicio automático al boot
 cat > /etc/systemd/system/deportedata.service << 'SVCEOF'
@@ -274,7 +277,7 @@ After=docker.service network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/home/ec2-user/app
-EnvironmentFile=/home/ec2-user/.env
+EnvironmentFile=/home/ec2-user/app/.env
 ExecStart=/usr/local/lib/docker/cli-plugins/docker-compose up -d
 ExecStop=/usr/local/lib/docker/cli-plugins/docker-compose down
 TimeoutStartSec=300

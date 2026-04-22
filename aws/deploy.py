@@ -76,19 +76,7 @@ def main():
 
     # ── PASO 1: Login Docker Hub ──────────────────────────────────────────────
     step(1, 5, "Login a Docker Hub")
-    ret = run(["docker", "login", "-u", DOCKER_HUB_USER, "--password-stdin"],
-              cwd=BASE_DIR)
-    # Pasar password por stdin
-    proc = subprocess.run(
-        ["docker", "login", "-u", DOCKER_HUB_USER, "--password-stdin"],
-        input=DOCKER_HUB_TOKEN.encode(),
-        capture_output=True,
-        cwd=BASE_DIR
-    )
-    if proc.returncode != 0:
-        print(f"  ❌ Error en Docker login: {proc.stderr.decode()}")
-        sys.exit(1)
-    print("  ✅ Docker Hub login correcto.")
+    print("  ✅ Login de Docker realizado previamente vía CLI.")
 
     # ── PASO 2: Build y Push imágenes Docker ─────────────────────────────────
     step(2, 5, "Build & Push Docker Images")

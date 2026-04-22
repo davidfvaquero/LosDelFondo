@@ -13,6 +13,9 @@ services:
 
   # ── Backend: FastAPI + Modelos IA ─────────────────────────────────────────
   api:
+    build:
+      context: .
+      file: Dockerfile.api
     image: nabreue01/deportedata-api:latest
     container_name: deportedata-api
     restart: unless-stopped
@@ -45,6 +48,9 @@ services:
 
   # ── Frontend: Streamlit Dashboard ─────────────────────────────────────────
   dashboard:
+    build:
+      context: .
+      file: Dockerfile.dashboard
     image: nabreue01/deportedata-dashboard:latest
     container_name: deportedata-dashboard
     restart: unless-stopped
