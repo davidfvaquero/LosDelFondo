@@ -1,0 +1,43 @@
+# ── Dockerfile.dashboard ───────────────────────────────────────────────────
+# Frontend: Streamlit Dashboard
+# Build: docker build -f Dockerfile.dashboard -t nabreue01/deportedata-dashboard:latest .
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONIOENCODING=utf-8
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Solo dependencias del dashboard (sin torch ni modelos)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+        streamlit>=1.30.0 \
+        pandas>=2.2.0 \
+        pyarrow>=15.0.0 \
+        plotly>=5.18.0 \
+        requests>=2.31.0
+
+# Copiar código del dashboard
+COPY dashboard/ ./dashboard/
+COPY .streamlit/ ./.streamlit/
+
+# Variable de entorno para la URL de la API (se inyecta en docker-compose / EC2 userdata)
+ENV API_URL=http://localhost:8000
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "dashboard/app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true", \
+     "--server.enableCORS=false"]
