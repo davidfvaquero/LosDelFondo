@@ -437,7 +437,9 @@ with st.sidebar:
         year_options,
         index=year_options.index(st.session_state.sel_year) if st.session_state.sel_year in year_options else 0
     )
-    st.session_state.sel_year = selected_year
+    if selected_year != st.session_state.sel_year:
+        st.session_state.sel_year = selected_year
+        st.rerun()
 
     # Filtro de Territorio
     territory_options = [
@@ -459,10 +461,10 @@ with st.sidebar:
         index=territory_options.index(display_territory) if display_territory in territory_options else 0
     )
     
-    if selected_territory == L['all_ccaa']:
-        st.session_state.sel_territory = "Todas las CCAA"
-    else:
-        st.session_state.sel_territory = selected_territory
+    new_territory = "Todas las CCAA" if selected_territory == L['all_ccaa'] else selected_territory
+    if new_territory != st.session_state.sel_territory:
+        st.session_state.sel_territory = new_territory
+        st.rerun()
 
     st.divider()
     
