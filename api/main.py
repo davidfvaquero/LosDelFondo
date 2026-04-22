@@ -35,12 +35,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
-# ── Logging ────────────────────────────────────────────────────────────────────
+# ── Logging (CloudWatch si está disponible) ────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 log = logging.getLogger("deportedata.api")
+
+try:
+    import watchtower, boto3
+    _cw_region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+    _cw_handler = watchtower.CloudWatchLogHandler(
+        log_group="/deportedata/api",
+        stream_name="api-{strftime:%Y-%m-%d}",
+        boto3_client=boto3.client("logs", region_name=_cw_region),
+    )
+    logging.getLogger().addHandler(_cw_handler)
+    log.info("CloudWatch logging activado.")
+except Exception:
+    log.info("CloudWatch no disponible (entorno local). Usando logs locales.")
 
 # ── Importar configuración central ────────────────────────────────────────────
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -214,20 +227,38 @@ class HealthResponse(BaseModel):
     error: Optional[str] = None
 
 
-CHAT_LOGS_FILE = "chat_logs.jsonl"
+# ── RDS Logger (con fallback a archivo local) ─────────────────────────────────
+try:
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    from aws.rds_logger import log_chat, get_recent_logs, get_admin_stats as rds_admin_stats
+    log.info("✅ Módulo RDS logger cargado correctamente.")
+except ImportError:
+    log.warning("⚠️ aws/rds_logger no encontrado. Usando log local de fallback.")
+    CHAT_LOGS_FILE = "chat_logs.jsonl"
 
-def log_chat(ip: str, prompt: str, is_toxic: bool):
-    try:
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "ip": ip,
-            "prompt": prompt,
-            "is_toxic": is_toxic
-        }
-        with open(CHAT_LOGS_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-    except Exception as e:
-        log.error(f"Error saving chat log: {e}")
+    def log_chat(ip: str, prompt: str, is_toxic: bool, toxic_score: float = 0.0,
+                 response_length: int = 0, lang: str = "ES"):
+        try:
+            entry = {
+                "timestamp": datetime.now().isoformat(),
+                "ip": ip, "prompt": prompt, "is_toxic": is_toxic,
+                "toxic_score": round(toxic_score, 4),
+            }
+            with open(CHAT_LOGS_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.error(f"Error saving chat log: {e}")
+
+    def get_recent_logs(limit: int = 100):
+        logs_list = []
+        if os.path.exists(CHAT_LOGS_FILE):
+            with open(CHAT_LOGS_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    try: logs_list.append(json.loads(line))
+                    except: pass
+        return list(reversed(logs_list))[-limit:]
+
+    def rds_admin_stats(): return None
 
 # ── Utilidades de Procesamiento de Datos ──────────────────────────────────────
 def repair_mojibake(text: str) -> str:
@@ -522,40 +553,49 @@ def get_dashboard_filters():
 
 
 @app.get("/api/v1/admin/stats", tags=["Admin"])
-def get_admin_stats(token: str = Depends(oauth2_scheme)):
-    """Requiere autenticación Bearer."""
+def get_admin_stats_endpoint(token: str = Depends(oauth2_scheme)):
+    """Requiere autenticación Bearer. Retorna estadísticas reales desde RDS si disponible."""
     get_current_user(token)
+
+    # Intentar obtener datos reales de RDS
+    real_stats = rds_admin_stats()
+
+    if real_stats:
+        total = real_stats.get("total_queries", 0)
+        daily = real_stats.get("daily_counts", [])
+        return {
+            "active_users": real_stats.get("active_users", 0),
+            "total_queries": total,
+            "chart_q": [d["count"] for d in daily],
+            "chart_v": np.random.randn(len(daily)).tolist(),
+            "total_by_day": [d["count"] for d in daily],
+            "failed_attempts": real_stats.get("toxic_attempts", 0),
+            "logs": get_recent_logs(10),
+            "cpu_load": "N/A (CloudWatch)",
+            "ram_usage": "N/A (CloudWatch)",
+            "system_load": np.random.randn(20).tolist()
+        }
+
+    # Fallback con datos simulados si no hay RDS
     return {
-        "active_users": 142,
-        "total_queries": 2840,
+        "active_users": 0,
+        "total_queries": len(get_recent_logs(1000)),
         "chart_q": np.random.randn(20).tolist(),
         "chart_v": np.random.randn(20).tolist(),
-        "total_by_day": np.random.randint(10, 100, size=7).tolist(),
-        "failed_attempts": 3,
-        "logs": [
-            {"User": "admin", "IP": "192.168.1.45", "Status": "Success"},
-            {"User": "root", "IP": "85.23.11.102", "Status": "Blocked"},
-            {"User": "guest", "IP": "172.16.0.5", "Status": "Failed"},
-            {"User": "admin", "IP": "192.168.1.45", "Status": "Success"}
-        ],
-        "cpu_load": "24%",
-        "ram_usage": "1.2 GB",
+        "total_by_day": np.random.randint(1, 20, size=7).tolist(),
+        "failed_attempts": 0,
+        "logs": get_recent_logs(10),
+        "cpu_load": "N/A",
+        "ram_usage": "N/A",
         "system_load": np.random.randn(20).tolist()
     }
 
 
 @app.get("/api/v1/admin/chat_logs", tags=["Admin"])
 def get_chat_logs(token: str = Depends(oauth2_scheme)):
+    """Devuelve logs de chat desde RDS (o archivo local como fallback)."""
     get_current_user(token)
-    logs = []
-    if os.path.exists(CHAT_LOGS_FILE):
-        with open(CHAT_LOGS_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    logs.append(json.loads(line))
-                except:
-                    pass
-    return list(reversed(logs))
+    return get_recent_logs(limit=200)
 
 
 @app.post("/toxicity", response_model=ToxicityResponse, tags=["AI"])
@@ -590,7 +630,7 @@ def chat_endpoint(req: ChatRequest, request: Request):
     # Layer 1: toxicidad
     is_toxic, toxic_score = _check_toxicity(req.prompt)
     if is_toxic:
-        log_chat(user_ip, req.prompt, True)
+        log_chat(user_ip, req.prompt, True, toxic_score=toxic_score, lang=req.lang)
         return ChatResponse(
             response="",
             is_toxic=True,
@@ -607,7 +647,10 @@ def chat_endpoint(req: ChatRequest, request: Request):
             req.top_p,
             req.repetition_penalty,
         )
-        log_chat(user_ip, req.prompt, False)
+        log_chat(user_ip, req.prompt, False,
+                 toxic_score=toxic_score,
+                 response_length=len(response),
+                 lang=req.lang)
     except Exception as exc:
         log.error(f"Error en generación LLM: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))

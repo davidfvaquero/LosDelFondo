@@ -1,0 +1,58 @@
+# ── Dockerfile.api ─────────────────────────────────────────────────────────
+# Backend: FastAPI + Qwen + Toxicity models
+# Build: docker build -f Dockerfile.api -t nabreue01/deportedata-api:latest .
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+# Evitar prompts interactivos y forzar UTF-8 (crítico para los modelos en español)
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONIOENCODING=utf-8
+
+WORKDIR /app
+
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar requirements y instalar (sin Ray ni bitsandbytes que son de entrenamiento)
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+        fastapi>=0.111.0 \
+        "uvicorn[standard]>=0.29.0" \
+        requests>=2.31.0 \
+        python-multipart \
+        torch --index-url https://download.pytorch.org/whl/cpu \
+        transformers>=4.40.0 \
+        accelerate>=0.28.0 \
+        peft>=0.10.0 \
+        sentencepiece \
+        protobuf \
+        pandas>=2.2.0 \
+        pyarrow>=15.0.0 \
+        numpy \
+        boto3 \
+        psycopg2-binary \
+        watchtower
+
+# Copiar código fuente
+COPY api/ ./api/
+COPY config.py .
+COPY data/processed/federados.parquet ./data/processed/federados.parquet
+COPY data/processed/gasto.parquet ./data/processed/gasto.parquet
+
+# Los modelos se descargan desde HuggingFace en el primer arranque
+# o se copian desde S3 via entrypoint
+COPY docker/entrypoint_api.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8000
+
+ENTRYPOINT ["/entrypoint.sh"]

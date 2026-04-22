@@ -1,0 +1,70 @@
+version: "3.9"
+
+# ── DEPORTEData – Docker Compose (despliegue en EC2) ────────────────────────
+# Uso:
+#   docker-compose up -d
+#
+# Variables de entorno requeridas (en .env o inyectadas por EC2 userdata):
+#   S3_BUCKET, AWS_DEFAULT_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   DB_HOST, DB_NAME, DB_USER, DB_PASSWORD
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Backend: FastAPI + Modelos IA ─────────────────────────────────────────
+  api:
+    image: nabreue01/deportedata-api:latest
+    container_name: deportedata-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - S3_BUCKET=${S3_BUCKET}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      - DB_HOST=${DB_HOST}
+      - DB_NAME=${DB_NAME:-deportedata}
+      - DB_USER=${DB_USER:-admin}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
+    volumes:
+      # Persistir modelos descargados entre reinicios del contenedor
+      - models_cache:/app/models
+      - data_cache:/app/data/processed
+      # Logs de chat locales (respaldo adicional)
+      - chat_logs:/app/chat_logs.jsonl
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Los modelos tardan en cargarse
+
+  # ── Frontend: Streamlit Dashboard ─────────────────────────────────────────
+  dashboard:
+    image: nabreue01/deportedata-dashboard:latest
+    container_name: deportedata-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  models_cache:
+    driver: local
+  data_cache:
+    driver: local
+  chat_logs:
+    driver: local
