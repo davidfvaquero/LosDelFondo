@@ -27,8 +27,10 @@ import pandas as pd
 import numpy as np
 import unicodedata
 import re
+import json
+from datetime import datetime
 from functools import lru_cache
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
@@ -187,6 +189,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     prompt: str
     lang: str = "ES"
+    user_ip: Optional[str] = None
     max_new_tokens: int = 200
     temperature: float = 0.3
     top_p: float = 0.9
@@ -210,6 +213,21 @@ class HealthResponse(BaseModel):
     device: str
     error: Optional[str] = None
 
+
+CHAT_LOGS_FILE = "chat_logs.jsonl"
+
+def log_chat(ip: str, prompt: str, is_toxic: bool):
+    try:
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "ip": ip,
+            "prompt": prompt,
+            "is_toxic": is_toxic
+        }
+        with open(CHAT_LOGS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log.error(f"Error saving chat log: {e}")
 
 # ── Utilidades de Procesamiento de Datos ──────────────────────────────────────
 def repair_mojibake(text: str) -> str:
@@ -526,6 +544,20 @@ def get_admin_stats(token: str = Depends(oauth2_scheme)):
     }
 
 
+@app.get("/api/v1/admin/chat_logs", tags=["Admin"])
+def get_chat_logs(token: str = Depends(oauth2_scheme)):
+    get_current_user(token)
+    logs = []
+    if os.path.exists(CHAT_LOGS_FILE):
+        with open(CHAT_LOGS_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    logs.append(json.loads(line))
+                except:
+                    pass
+    return list(reversed(logs))
+
+
 @app.post("/toxicity", response_model=ToxicityResponse, tags=["AI"])
 def check_toxicity_endpoint(req: ToxicityRequest):
     """
@@ -540,7 +572,7 @@ def check_toxicity_endpoint(req: ToxicityRequest):
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["AI"])
-def chat_endpoint(req: ChatRequest):
+def chat_endpoint(req: ChatRequest, request: Request):
     """
     Genera una respuesta del chatbot.
 
@@ -553,9 +585,12 @@ def chat_endpoint(req: ChatRequest):
     if not state.loaded:
         raise HTTPException(status_code=503, detail="Modelos aún no cargados.")
 
+    user_ip = req.user_ip or request.client.host
+
     # Layer 1: toxicidad
     is_toxic, toxic_score = _check_toxicity(req.prompt)
     if is_toxic:
+        log_chat(user_ip, req.prompt, True)
         return ChatResponse(
             response="",
             is_toxic=True,
@@ -572,6 +607,7 @@ def chat_endpoint(req: ChatRequest):
             req.top_p,
             req.repetition_penalty,
         )
+        log_chat(user_ip, req.prompt, False)
     except Exception as exc:
         log.error(f"Error en generación LLM: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
