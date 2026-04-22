@@ -43,7 +43,7 @@ El flujo es:
 1. Abres o actualizas una PR contra `main`, `dev` o `api`.
 2. GitHub ejecuta la CI sobre la rama origen de esa PR.
 3. Si la CI termina bien, dentro del mismo workflow se ejecuta el despliegue por SSH hacia la EC2 del entorno asociado a la rama destino.
-4. La EC2 hace `git fetch`, actualiza la rama origen de la PR, instala dependencias, regenera datos y reinicia el servicio.
+4. La EC2 hace `git fetch`, actualiza la rama destino de la PR, instala dependencias, regenera datos y reinicia el servicio.
 
 ### Environments y ramas
 
@@ -68,9 +68,9 @@ Opciones recomendadas:
 
 Ejemplos:
 
-- PR `feature-x` -> `dev`: despliega `feature-x` en la EC2 del environment `staging`
-- PR `fix-y` -> `main`: despliega `fix-y` en la EC2 del environment `Production`
-- PR `feature-api` -> `api`: despliega `feature-api` en la EC2 del environment `api`
+- PR `feature-x` -> `dev`: despliega `dev` en la EC2 del environment `staging`
+- PR `fix-y` -> `main`: despliega `main` en la EC2 del environment `Production`
+- PR `feature-api` -> `api`: despliega `api` en la EC2 del environment `api`
 
 El workflow [`.github/workflows/ec2-deploy.yml`](/home/gordolinus/projects/LosDelFondo/.github/workflows/ec2-deploy.yml) queda como utilidad manual para lanzarlo desde `workflow_dispatch` si necesitas forzar un deploy de una rama concreta.
 
