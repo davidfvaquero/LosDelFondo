@@ -40,10 +40,10 @@ Si quieres desplegar en una instancia EC2 en vez de Render, el repo incluye ahor
 
 El flujo es:
 
-1. Haces `push` o merge a `main`, `dev` o `api`.
-2. GitHub ejecuta la CI.
+1. Abres o actualizas una PR contra `main`, `dev` o `api`.
+2. GitHub ejecuta la CI sobre la rama origen de esa PR.
 3. Si la CI termina bien, GitHub abre una conexion SSH con la EC2.
-4. La EC2 hace `git fetch`, actualiza el repo, instala dependencias, regenera datos y reinicia el servicio.
+4. La EC2 hace `git fetch`, actualiza la rama origen de la PR, instala dependencias, regenera datos y reinicia el servicio del entorno asociado a la rama destino.
 
 ### Environments y ramas
 
@@ -53,13 +53,24 @@ Configura tres `Environments` en GitHub:
 - `staging` para la rama `dev`
 - `api` para la rama `api`
 
-El workflow selecciona automaticamente el environment segun la rama:
+El workflow selecciona automaticamente el environment segun la rama destino de la PR:
 
 - `main` -> `Production`
 - `dev` -> `staging`
 - `api` -> `api`
 
-En cada environment, limita `Deployment branches and tags` a su rama correspondiente.
+Si vas a desplegar desde PRs, no limites `Deployment branches and tags` solo a `main`, `dev` o `api`, porque el workflow se ejecuta tomando como referencia la rama origen de la PR.
+
+Opciones recomendadas:
+
+- dejar el environment sin restriccion de ramas
+- o permitir un patron que cubra las ramas desde las que abras PRs
+
+Ejemplos:
+
+- PR `feature-x` -> `dev`: despliega `feature-x` en la EC2 del environment `staging`
+- PR `fix-y` -> `main`: despliega `fix-y` en la EC2 del environment `Production`
+- PR `feature-api` -> `api`: despliega `feature-api` en la EC2 del environment `api`
 
 ### Secrets que debes crear en GitHub
 
