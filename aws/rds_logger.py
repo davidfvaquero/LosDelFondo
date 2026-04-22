@@ -22,7 +22,6 @@ import os
 import logging
 import json
 from datetime import datetime, timezone
-from typing import Optional
 
 log = logging.getLogger("deportedata.rds")
 

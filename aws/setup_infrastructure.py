@@ -21,9 +21,7 @@ Variables de entorno requeridas:
 
 import boto3
 import json
-import time
 import os
-import sys
 
 # ─── Configuración ──────────────────────────────────────────────────────────
 REGION          = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
@@ -96,7 +94,7 @@ def upload_parquets():
 # ─── 3. CloudWatch Log Group ─────────────────────────────────────────────────
 def create_cloudwatch():
     print("\n[3/6] Configurando CloudWatch...")
-    log_group = f"/deportedata/api"
+    log_group = "/deportedata/api"
     try:
         logs.create_log_group(logGroupName=log_group)
         logs.put_retention_policy(logGroupName=log_group, retentionInDays=30)
@@ -141,7 +139,7 @@ def create_rds(sg_id: str, subnet_ids: list[str]) -> str:
             DeletionProtection=False,
             Tags=[{"Key": "Project", "Value": "DEPORTEData"}],
         )
-        print(f"  ⏳ RDS creándose... (puede tardar ~5 minutos)")
+        print("  ⏳ RDS creándose... (puede tardar ~5 minutos)")
 
         # Esperar a que esté disponible
         waiter = rds.get_waiter("db_instance_available")
@@ -321,7 +319,7 @@ echo "=== Setup completado ==="
 
         desc = ec2.describe_instances(InstanceIds=[instance_id])
         public_ip = desc["Reservations"][0]["Instances"][0].get("PublicIpAddress", "N/A")
-        print(f"  ✅ EC2 corriendo!")
+        print("  ✅ EC2 corriendo!")
         print(f"  📍 IP Pública: {public_ip}")
         print(f"  🌐 API:        http://{public_ip}:8000")
         print(f"  🌐 Dashboard:  http://{public_ip}:8501")
@@ -362,7 +360,7 @@ def main():
     print(f"  RDS:         {db_endpoint}:5432 / db={DB_NAME}")
     print(f"  EC2 API:     http://{public_ip}:8000")
     print(f"  EC2 Dash:    http://{public_ip}:8501")
-    print(f"  CloudWatch:  /deportedata/api")
+    print("  CloudWatch:  /deportedata/api")
     print("\n  ⚠️  Los modelos de IA se descargarán desde HuggingFace/S3")
     print("  ⚠️  La API puede tardar 2-5 min en estar lista (primera carga)")
     print("=" * 60)
