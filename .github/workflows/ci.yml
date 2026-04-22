@@ -2,6 +2,10 @@ name: CI
 
 on:
   pull_request:
+    branches:
+      - dev
+      - main
+      - api
   push:
     branches:
       - main
@@ -47,3 +51,60 @@ jobs:
       - name: Validate generated dataset
         run: |
           python -c "from pathlib import Path; import pandas as pd; path = Path('data/processed/deporte_data/anio=2023/hechos_indicadores.parquet'); assert path.exists(), f'Missing file: {path}'; df = pd.read_parquet(path); expected = {'CCAA', 'Gasto_Promedio_Hogar_Eur', 'Licencias_Federadas', 'Poblacion_Activa_Dep', 'anio', 'fuente'}; missing = expected.difference(df.columns); assert not missing, f'Missing columns: {sorted(missing)}'; assert len(df) == 17, f'Unexpected row count: {len(df)}'"
+
+  deploy_ec2:
+    needs: checks
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ github.base_ref == 'main' && 'Production' || github.base_ref == 'dev' && 'staging' || github.base_ref == 'api' && 'api' || '' }}
+
+    steps:
+      - name: Validate PR target branch
+        run: |
+          case "${{ github.base_ref }}" in
+            main|dev|api)
+              ;;
+            *)
+              echo "Unsupported PR base branch: ${{ github.base_ref }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Validate required secrets
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+          EC2_APP_DIR: ${{ secrets.EC2_APP_DIR }}
+          EC2_SYSTEMD_SERVICE: ${{ secrets.EC2_SYSTEMD_SERVICE }}
+        run: |
+          for secret_name in EC2_HOST EC2_USER EC2_SSH_PRIVATE_KEY EC2_KNOWN_HOSTS EC2_APP_DIR EC2_SYSTEMD_SERVICE; do
+            if [ -z "${!secret_name}" ]; then
+              echo "Missing required secret: $secret_name"
+              exit 1
+            fi
+          done
+
+      - name: Configure SSH
+        env:
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy on EC2 through SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_APP_DIR: ${{ secrets.EC2_APP_DIR }}
+          EC2_SYSTEMD_SERVICE: ${{ secrets.EC2_SYSTEMD_SERVICE }}
+          DEPLOY_BRANCH: ${{ github.head_ref }}
+        run: |
+          ssh "$EC2_USER@$EC2_HOST" \
+            "cd '$EC2_APP_DIR' && DEPLOY_BRANCH='$DEPLOY_BRANCH' EC2_SYSTEMD_SERVICE='$EC2_SYSTEMD_SERVICE' bash scripts/deploy_ec2.sh"
