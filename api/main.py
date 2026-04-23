@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI):
 
         # 1. Cargar Modelo de Toxicidad (Local -> HF Fallback)
         # Usamos un modelo público como fallback para asegurar que la conexión funcione sin tokens.
-        t_path = TOXICITY_MODEL_DIR if os.path.exists(TOXICITY_MODEL_DIR) else "alfersal/qwen2.5-7b-deporte"
+        t_path = TOXICITY_MODEL_DIR if os.path.exists(TOXICITY_MODEL_DIR) else "alfersal04/antiToxicidad"
         log.info(f"  → Toxicity: {t_path} ({'local' if os.path.exists(TOXICITY_MODEL_DIR) else 'HuggingFace'})")
         state.toxic_tokenizer = AutoTokenizer.from_pretrained(t_path)
         state.toxic_model = AutoModelForSequenceClassification.from_pretrained(t_path)
@@ -139,7 +139,7 @@ async def lifespan(app: FastAPI):
         state.toxic_model.eval()
 
         # 2. Cargar Qwen Base (Local -> HF Fallback)
-        q_path = QWEN_MODEL_DIR if os.path.exists(QWEN_MODEL_DIR) else "alfersal/toxicity-deporte-est"
+        q_path = QWEN_MODEL_DIR if os.path.exists(QWEN_MODEL_DIR) else "alfersal04/QwenDeporteData"
         log.info(f"  → Qwen base: {q_path} ({'local' if os.path.exists(QWEN_MODEL_DIR) else 'HuggingFace'})")
         state.qwen_tokenizer = AutoTokenizer.from_pretrained(q_path)
         base = AutoModelForCausalLM.from_pretrained(
