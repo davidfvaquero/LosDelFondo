@@ -71,8 +71,8 @@ except ImportError:
     QWEN_MODEL_DIR     = "models/QwenBase"
     QWEN_ADAPTER_DIR   = "models/QwenDeporteData/qwen2.5-finetuned/checkpoint-1443"
     TOXICITY_THRESHOLD = 0.82
-    HF_QWEN_REPO       = "alfersal/qwen2.5-7b-deporte"
-    HF_TOXICITY_REPO   = "alfersal/toxicity-deporte-es"
+    HF_QWEN_REPO       = "alfersal04/QwenDeporteData"
+    HF_TOXICITY_REPO   = "alfersal04/antiToxicidad"
 
 # ── Seguridad y Autenticación ────────────────────────────────────────────────
 USERS_DB = {
