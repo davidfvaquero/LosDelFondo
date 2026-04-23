@@ -1,41 +1,33 @@
 """
-config.py
-=========
-Configuración central de DEPORTEData.
-
-Para activar los modelos de IA reales tras el entrenamiento:
-  1. Entrena con: python scripts/ray_finetune.py --workers 4 --use-gpu
-  2. Los modelos se suben automáticamente a Hugging Face Hub
-  3. Cambia USE_REAL_MODELS = True
-
-Todo lo demás sigue funcionando igual.
+Central configuration for DEPORTEData.
 """
 
-# ─── Modelos de IA ─────────────────────────────────────────────────────────
-# Cambia a True cuando los modelos estén entrenados y disponibles
-USE_REAL_MODELS: bool = True
+from __future__ import annotations
 
-# Rutas locales (modelos guardados en disco tras el entrenamiento)
-QWEN_MODEL_DIR:     str = "models/QwenBase"
-QWEN_ADAPTER_DIR:   str = "models/QwenDeporteData/qwen2.5-finetuned/checkpoint-1443"
-TOXICITY_MODEL_DIR: str = "models/antiToxicidad/toxicity-classifier"
+import os
 
-# Umbral de toxicidad (0.0-1.0). Más alto = menos falsos positivos.
-TOXICITY_THRESHOLD: float = 0.82
 
-# ─── Datos ─────────────────────────────────────────────────────────────────
-PROCESSED_DIR: str = "data/processed"
+USE_REAL_MODELS: bool = os.getenv("USE_REAL_MODELS", "true").lower() == "true"
+
+QWEN_MODEL_DIR: str = os.getenv("QWEN_MODEL_DIR", "models/QwenBase")
+QWEN_ADAPTER_DIR: str = os.getenv(
+    "QWEN_ADAPTER_DIR",
+    "models/QwenDeporteData/qwen2.5-finetuned/checkpoint-1443",
+)
+TOXICITY_MODEL_DIR: str = os.getenv(
+    "TOXICITY_MODEL_DIR",
+    "models/antiToxicidad/toxicity-classifier",
+)
+
+TOXICITY_THRESHOLD: float = float(os.getenv("TOXICITY_THRESHOLD", "0.82"))
+
+PROCESSED_DIR: str = os.getenv("PROCESSED_DIR", "data/processed")
 FEDERADOS_PARQUET: str = f"{PROCESSED_DIR}/federados.parquet"
-GASTO_PARQUET:     str = f"{PROCESSED_DIR}/gasto.parquet"
+GASTO_PARQUET: str = f"{PROCESSED_DIR}/gasto.parquet"
 
-# ─── Hugging Face Hub ──────────────────────────────────────────────────────
-# Repositorios donde se publican los modelos entrenados con Ray Train.
-# Actualizado automáticamente por scripts/ray_finetune.py al finalizar.
-HF_USERNAME:      str = "alfersal"
-HF_QWEN_REPO:     str = f"{HF_USERNAME}/qwen2.5-7b-deporte"
-HF_TOXICITY_REPO: str = f"{HF_USERNAME}/toxicity-deporte-es"
+HF_QWEN_BASE_REPO: str = os.getenv("HF_QWEN_BASE_REPO", "Qwen/Qwen2.5-1.5B-Instruct")
+HF_QWEN_REPO: str = os.getenv("HF_QWEN_REPO", "alfersal04/QwenDeporteData")
+HF_TOXICITY_REPO: str = os.getenv("HF_TOXICITY_REPO", "alfersal04/antiToxicidad")
 
-# ─── Ray Training ──────────────────────────────────────────────────────────
-# Configuración por defecto para el clúster Ray (ajustar según infraestructura)
-RAY_NUM_WORKERS: int  = 4    # Número de workers GPU en el clúster
-RAY_USE_GPU:     bool = True  # False para pruebas en CPU local
+RAY_NUM_WORKERS: int = int(os.getenv("RAY_NUM_WORKERS", "4"))
+RAY_USE_GPU: bool = os.getenv("RAY_USE_GPU", "true").lower() == "true"

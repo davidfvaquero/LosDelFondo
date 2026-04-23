@@ -63,6 +63,7 @@ try:
         QWEN_MODEL_DIR,
         QWEN_ADAPTER_DIR,
         TOXICITY_THRESHOLD,
+        HF_QWEN_BASE_REPO,
         HF_QWEN_REPO,
         HF_TOXICITY_REPO,
     )
@@ -71,8 +72,9 @@ except ImportError:
     QWEN_MODEL_DIR     = "models/QwenBase"
     QWEN_ADAPTER_DIR   = "models/QwenDeporteData/qwen2.5-finetuned/checkpoint-1443"
     TOXICITY_THRESHOLD = 0.82
-    HF_QWEN_REPO       = "alfersal/qwen2.5-7b-deporte"
-    HF_TOXICITY_REPO   = "alfersal/toxicity-deporte-es"
+    HF_QWEN_BASE_REPO  = "Qwen/Qwen2.5-1.5B-Instruct"
+    HF_QWEN_REPO       = "alfersal04/QwenDeporteData"
+    HF_TOXICITY_REPO   = "alfersal04/antiToxicidad"
 
 # ── Seguridad y Autenticación ────────────────────────────────────────────────
 USERS_DB = {
@@ -113,6 +115,15 @@ class ModelState:
 state = ModelState()
 
 
+def get_client_ip_from_request(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
 # ── Carga de modelos al arrancar ───────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -131,7 +142,7 @@ async def lifespan(app: FastAPI):
 
         # 1. Cargar Modelo de Toxicidad (Local -> HF Fallback)
         # Usamos un modelo público como fallback para asegurar que la conexión funcione sin tokens.
-        t_path = TOXICITY_MODEL_DIR if os.path.exists(TOXICITY_MODEL_DIR) else "unitary/multilingual-toxic-xlm-roberta"
+        t_path = TOXICITY_MODEL_DIR if os.path.exists(TOXICITY_MODEL_DIR) else HF_TOXICITY_REPO
         log.info(f"  → Toxicity: {t_path} ({'local' if os.path.exists(TOXICITY_MODEL_DIR) else 'HuggingFace'})")
         state.toxic_tokenizer = AutoTokenizer.from_pretrained(t_path)
         state.toxic_model = AutoModelForSequenceClassification.from_pretrained(t_path)
@@ -139,12 +150,14 @@ async def lifespan(app: FastAPI):
         state.toxic_model.eval()
 
         # 2. Cargar Qwen Base (Local -> HF Fallback)
-        q_path = QWEN_MODEL_DIR if os.path.exists(QWEN_MODEL_DIR) else "Qwen/Qwen2.5-0.5B-Instruct"
+        q_path = QWEN_MODEL_DIR if os.path.exists(QWEN_MODEL_DIR) else HF_QWEN_BASE_REPO
         log.info(f"  → Qwen base: {q_path} ({'local' if os.path.exists(QWEN_MODEL_DIR) else 'HuggingFace'})")
         state.qwen_tokenizer = AutoTokenizer.from_pretrained(q_path)
+        if state.qwen_tokenizer.pad_token_id is None:
+            state.qwen_tokenizer.pad_token = state.qwen_tokenizer.eos_token
         base = AutoModelForCausalLM.from_pretrained(
             q_path,
-            dtype=_dtype,
+            torch_dtype=_dtype,
             low_cpu_mem_usage=False,
         )
         
@@ -280,7 +293,7 @@ def normalize_column_name(name: str) -> str:
     clean = repair_mojibake(name).lower()
     clean = unicodedata.normalize("NFKD", clean)
     clean = "".join(c for c in clean if not unicodedata.combining(c))
-    return re.sub(r'[^a-z0-t0-9]', '', clean)
+    return re.sub(r'[^a-z0-9]', '', clean)
 
 def normalize_for_match(text: str) -> str:
     """Normalización ultra-agresiva para cruzar datos (CCAA, Federaciones)."""
@@ -625,7 +638,7 @@ def chat_endpoint(req: ChatRequest, request: Request):
     if not state.loaded:
         raise HTTPException(status_code=503, detail="Modelos aún no cargados.")
 
-    user_ip = req.user_ip or request.client.host
+    user_ip = req.user_ip or get_client_ip_from_request(request)
 
     # Layer 1: toxicidad
     is_toxic, toxic_score = _check_toxicity(req.prompt)

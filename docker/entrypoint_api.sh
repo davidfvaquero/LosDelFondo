@@ -1,60 +1,58 @@
 #!/bin/bash
-# ── entrypoint_api.sh ──────────────────────────────────────────────────────
-# Entrypoint del contenedor API:
-#   1. Descarga modelos desde S3 si no existen localmente
-#   2. Arranca uvicorn
-# ─────────────────────────────────────────────────────────────────────────────
-set -e
+set -euo pipefail
 
 echo "============================================"
-echo "  DEPORTEData API - Iniciando..."
+echo "  DEPORTEData API - starting"
 echo "============================================"
-
-# Variables de entorno esperadas (inyectadas desde EC2 userdata / docker-compose):
-#   S3_BUCKET         — Nombre del bucket S3
-#   AWS_DEFAULT_REGION — Región de AWS
-#   DB_HOST, DB_NAME, DB_USER, DB_PASSWORD — Para logs RDS
 
 MODELS_DIR="/app/models"
-S3_BUCKET="${S3_BUCKET:-deportedata-models}"
+DATA_DIR="/app/data/processed"
+S3_BUCKET="${S3_BUCKET:-}"
+AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 
-# ── 1. Descargar modelos desde S3 si no están presentes ──────────────────
-download_from_s3() {
-    local s3_path="$1"
-    local local_path="$2"
-    if [ ! -d "$local_path" ]; then
-        echo "[INFO] Descargando $s3_path desde S3..."
-        mkdir -p "$local_path"
-        aws s3 sync "s3://${S3_BUCKET}/${s3_path}" "$local_path" --quiet
-        echo "[OK] $local_path listo."
+mkdir -p "${MODELS_DIR}" "${DATA_DIR}"
+
+sync_prefix() {
+    local prefix="$1"
+    local target="$2"
+    if [ -z "${S3_BUCKET}" ]; then
+        return 0
+    fi
+
+    mkdir -p "${target}"
+    echo "[INFO] Syncing s3://${S3_BUCKET}/${prefix} -> ${target}"
+    if aws s3 sync "s3://${S3_BUCKET}/${prefix}" "${target}" --region "${AWS_DEFAULT_REGION}" --only-show-errors; then
+        echo "[OK] Sync complete for ${prefix}"
     else
-        echo "[INFO] $local_path ya existe, saltando descarga."
+        echo "[WARN] Could not sync ${prefix} from S3"
     fi
 }
 
-# Descargar modelos desde S3
-download_from_s3 "models/QwenBase"          "${MODELS_DIR}/QwenBase"
-download_from_s3 "models/QwenDeporteData"   "${MODELS_DIR}/QwenDeporteData"
-download_from_s3 "models/antiToxicidad"     "${MODELS_DIR}/antiToxicidad"
+ensure_models() {
+    local toxicity_dir="${MODELS_DIR}/antiToxicidad/toxicity-classifier"
+    local qwen_base_dir="${MODELS_DIR}/QwenBase"
+    local qwen_adapter_dir="${MODELS_DIR}/QwenDeporteData/qwen2.5-finetuned/checkpoint-1443"
 
-# ── 2. Descargar parquets desde S3 si no están ───────────────────────────
-DATA_DIR="/app/data/processed"
-mkdir -p "$DATA_DIR"
-
-for file in federados.parquet gasto.parquet; do
-    if [ ! -f "${DATA_DIR}/${file}" ]; then
-        echo "[INFO] Descargando ${file} desde S3..."
-        aws s3 cp "s3://${S3_BUCKET}/data/processed/${file}" "${DATA_DIR}/${file}"
-        echo "[OK] ${file} listo."
+    if [ ! -d "${toxicity_dir}" ] || [ ! -d "${qwen_base_dir}" ] || [ ! -d "${qwen_adapter_dir}" ]; then
+        sync_prefix "models" "${MODELS_DIR}"
     fi
-done
 
-# ── 3. Arrancar API ──────────────────────────────────────────────────────
-echo ""
-echo "[INFO] Arrancando FastAPI (uvicorn)..."
-echo "[INFO] API disponible en http://0.0.0.0:8000"
-echo ""
+    if [ ! -d "${toxicity_dir}" ] || [ ! -d "${qwen_base_dir}" ] || [ ! -d "${qwen_adapter_dir}" ]; then
+        echo "[INFO] Downloading models from Hugging Face ..."
+        python /app/scripts/download_models.py
+    fi
+}
 
+ensure_data() {
+    if [ ! -d "${DATA_DIR}/federados.parquet" ] || [ ! -d "${DATA_DIR}/gasto.parquet" ]; then
+        sync_prefix "data/processed" "${DATA_DIR}"
+    fi
+}
+
+ensure_models
+ensure_data
+
+echo "[INFO] Starting FastAPI on 0.0.0.0:8000"
 exec uvicorn api.main:app \
     --host 0.0.0.0 \
     --port 8000 \

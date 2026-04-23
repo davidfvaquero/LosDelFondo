@@ -1,0 +1,10 @@
+.git
+.venv
+.vendor
+.deploydeps
+__pycache__
+.pytest_cache
+scratch
+models
+aws/deployment_info.json
+chat_logs.jsonl

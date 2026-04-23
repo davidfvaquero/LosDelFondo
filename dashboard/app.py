@@ -2,10 +2,11 @@ import streamlit as st
 import time
 import pandas as pd
 import plotly.express as px
+import os
 
 import requests
 
-API_URL = "http://localhost:8000"
+API_URL = os.getenv("API_URL") or os.getenv("DEPORTEDATA_API_URL") or "http://localhost:8000"
 
 def get_api_data(endpoint, params=None, auth_token=None):
     """Helper para llamadas GET a la API."""
@@ -679,4 +680,3 @@ if st.session_state.is_admin:
                 
         else:
             st.error("No se pudo conectar con el servicio administrativo de la API.")
-

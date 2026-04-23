@@ -1,143 +1,122 @@
 #!/usr/bin/env python3
-"""
-aws/deploy.py
-==============
-Script maestro de despliegue completo de DEPORTEData en AWS.
-Ejecuta todos los pasos en orden:
-  1. Construye las imágenes Docker y las sube a Docker Hub
-  2. Crea la infraestructura AWS (S3, RDS, EC2, CloudWatch)
-  3. Sube los modelos y parquets a S3
-  4. Espera a que la EC2 esté lista y verifica la salud de la API
+from __future__ import annotations
 
-Uso:
-    python aws/deploy.py
-"""
-
+import json
+import os
 import subprocess
 import sys
-import os
-import json
+import tarfile
 import time
 import urllib.request
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-DOCKER_HUB_USER  = os.environ.get("DOCKERHUB_USERNAME", "nabreue01")
-DOCKER_HUB_TOKEN = os.environ.get("DOCKERHUB_TOKEN", "")
+import boto3
 
 
-def run(cmd: list[str], cwd: str = BASE_DIR) -> int:
-    """Ejecuta un comando mostrando output en tiempo real."""
-    print(f"\n  $ {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=cwd)
-    return result.returncode
+BASE_DIR = Path(__file__).resolve().parents[1]
+REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+PROJECT_NAME = os.environ.get("PROJECT_NAME", "deportedata")
+SOURCE_ARCHIVE = BASE_DIR / "scratch" / "deportedata-source.tar.gz"
+SOURCE_ARCHIVE_KEY = os.environ.get("SOURCE_ARCHIVE_KEY", "releases/current.tar.gz")
+DEPLOYMENT_INFO_PATH = BASE_DIR / "aws" / "deployment_info.json"
 
 
-def step(n: int, total: int, title: str):
-    print(f"\n{'='*60}")
-    print(f"  PASO {n}/{total}: {title}")
-    print(f"{'='*60}")
+def run(command: list[str]) -> None:
+    result = subprocess.run(command, cwd=BASE_DIR)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed: {' '.join(command)}")
 
 
-def check_api_health(ip: str, max_retries: int = 20, delay: int = 30) -> bool:
-    """Espera a que la API responda en /health."""
-    url = f"http://{ip}:8000/health"
-    print(f"\n  ⏳ Esperando API en {url}...")
-    for i in range(max_retries):
+def package_source() -> Path:
+    SOURCE_ARCHIVE.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(SOURCE_ARCHIVE, "w:gz") as archive:
+        for path in sorted(BASE_DIR.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(BASE_DIR)
+            if any(
+                part in {".git", ".venv", ".vendor", ".deploydeps", "__pycache__", ".pytest_cache", "models"}
+                for part in relative.parts
+            ):
+                continue
+            if relative.parts and relative.parts[0] == "scratch":
+                continue
+            archive.add(path, arcname=str(relative))
+    return SOURCE_ARCHIVE
+
+
+def ensure_bucket_name() -> str:
+    session = boto3.Session(region_name=REGION)
+    sts = session.client("sts")
+    account_id = sts.get_caller_identity()["Account"]
+    return os.environ.get("S3_BUCKET", f"{PROJECT_NAME}-{account_id}-{REGION}")
+
+
+def ensure_bucket_exists(bucket: str) -> None:
+    s3 = boto3.client("s3", region_name=REGION)
+    try:
+        if REGION == "us-east-1":
+            s3.create_bucket(Bucket=bucket)
+        else:
+            s3.create_bucket(
+                Bucket=bucket,
+                CreateBucketConfiguration={"LocationConstraint": REGION},
+            )
+    except Exception:
+        pass
+
+
+def upload_archive(bucket: str, archive_path: Path) -> None:
+    s3 = boto3.client("s3", region_name=REGION)
+    print(f"Uploading source archive to s3://{bucket}/{SOURCE_ARCHIVE_KEY}")
+    s3.upload_file(str(archive_path), bucket, SOURCE_ARCHIVE_KEY)
+
+
+def wait_for_health(url: str, attempts: int = 60, delay: int = 20) -> bool:
+    for index in range(attempts):
         try:
-            with urllib.request.urlopen(url, timeout=5) as r:
-                data = json.loads(r.read())
-                if data.get("status") == "ok":
-                    print(f"  ✅ API lista! Modelos cargados: {data.get('models_loaded')}")
+            with urllib.request.urlopen(url, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                if payload.get("models_loaded"):
+                    print(f"Health check passed on attempt {index + 1}")
                     return True
-                else:
-                    print(f"  [{i+1}/{max_retries}] Status: {data.get('status')} — esperando...")
-        except Exception as e:
-            print(f"  [{i+1}/{max_retries}] No disponible aún ({type(e).__name__})...")
+                print(f"Attempt {index + 1}: API up but models still loading")
+        except Exception as exc:
+            print(f"Attempt {index + 1}: waiting for service ({type(exc).__name__})")
         time.sleep(delay)
     return False
 
 
-def main():
-    print("\n" + "="*60)
-    print("  DEPORTEData — DESPLIEGUE COMPLETO EN AWS")
-    print("="*60)
+def main() -> None:
+    print("Packaging source artifact ...")
+    archive_path = package_source()
 
-    # Cargar .env
-    env_path = os.path.join(BASE_DIR, ".env")
-    if os.path.exists(env_path):
-        print("  📄 Cargando variables desde .env...")
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ.setdefault(k.strip(), v.strip())
+    bucket_name = ensure_bucket_name()
+    os.environ["S3_BUCKET"] = bucket_name
+    os.environ["SOURCE_ARCHIVE_KEY"] = SOURCE_ARCHIVE_KEY
+    ensure_bucket_exists(bucket_name)
 
-    # ── PASO 1: Login Docker Hub ──────────────────────────────────────────────
-    step(1, 5, "Login a Docker Hub")
-    print("  ✅ Login de Docker realizado previamente vía CLI.")
+    print("Preparing processed data ...")
+    run([sys.executable, "scripts/process_data.py"])
 
-    # ── PASO 2: Build y Push imágenes Docker ─────────────────────────────────
-    step(2, 5, "Build & Push Docker Images")
+    print("Uploading application archive, models and parquet data ...")
+    upload_archive(bucket_name, archive_path)
+    run([sys.executable, "aws/upload_models_to_s3.py"])
 
-    images = [
-        ("Dockerfile.api",       f"{DOCKER_HUB_USER}/deportedata-api:latest"),
-        ("Dockerfile.dashboard", f"{DOCKER_HUB_USER}/deportedata-dashboard:latest"),
-    ]
-    for dockerfile, tag in images:
-        print(f"\n  🐳 Building {tag}...")
-        ret = run(["docker", "build", "-f", dockerfile, "-t", tag, "."])
-        if ret != 0:
-            print(f"  ❌ Build falló para {tag}")
-            sys.exit(1)
-        print(f"  ⬆️  Pushing {tag}...")
-        ret = run(["docker", "push", tag])
-        if ret != 0:
-            print(f"  ❌ Push falló para {tag}")
-            sys.exit(1)
-        print(f"  ✅ {tag} publicada en Docker Hub.")
+    print("Creating AWS resources ...")
+    run([sys.executable, "aws/setup_infrastructure.py"])
 
-    # ── PASO 3: Infraestructura AWS ───────────────────────────────────────────
-    step(3, 5, "Crear Infraestructura AWS (S3 + RDS + EC2 + CloudWatch)")
-    ret = run([sys.executable, "aws/setup_infrastructure.py"])
-    if ret != 0:
-        print("  ❌ Error creando infraestructura.")
-        sys.exit(1)
+    deployment = json.loads(DEPLOYMENT_INFO_PATH.read_text(encoding="utf-8"))
+    web_url = deployment.get("web_url")
+    health_url = deployment.get("health_url")
+    api_url = deployment.get("api_url")
 
-    # Leer IP pública generada
-    info_path = os.path.join(BASE_DIR, "aws", "deployment_info.json")
-    if not os.path.exists(info_path):
-        print("  ❌ No se encontró aws/deployment_info.json")
-        sys.exit(1)
-    with open(info_path) as f:
-        info = json.load(f)
-    public_ip = info["public_ip"]
+    print(f"Web URL: {web_url}")
+    print(f"API URL: {api_url}")
+    print(f"Health URL: {health_url}")
 
-    # ── PASO 4: Subir modelos a S3 ────────────────────────────────────────────
-    step(4, 5, "Subir modelos y parquets a S3")
-    ret = run([sys.executable, "aws/upload_models_to_s3.py"])
-    if ret != 0:
-        print("  ⚠️  Algunos modelos no se pudieron subir. La EC2 los descargará de HuggingFace.")
-
-    # ── PASO 5: Verificar despliegue ──────────────────────────────────────────
-    step(5, 5, "Verificar despliegue")
-    print("\n  ⏳ Esperando que la EC2 configure Docker y arranque los contenedores...")
-    print("  (Esto puede tardar 5-10 minutos en la primera ejecución)")
-    time.sleep(60)
-
-    api_ok = check_api_health(public_ip, max_retries=15, delay=30)
-
-    print("\n" + "="*60)
-    print("  ✅ DESPLIEGUE COMPLETADO")
-    print("="*60)
-    print(f"  🌐 API:       http://{public_ip}:8000")
-    print(f"  🌐 Dashboard: http://{public_ip}:8501")
-    print(f"  📊 API Docs:  http://{public_ip}:8000/docs")
-    if not api_ok:
-        print("\n  ⚠️  La API aún no responde. Los modelos pueden seguir cargándose.")
-        print(f"     Comprueba el estado en: http://{public_ip}:8000/health")
-    print("="*60)
+    if health_url and not wait_for_health(health_url):
+        print("The service is still warming up. Check the health endpoint again in a few minutes.")
 
 
 if __name__ == "__main__":

@@ -1,39 +1,52 @@
+from __future__ import annotations
+
 import os
+import sys
+from pathlib import Path
+
 from huggingface_hub import snapshot_download
 
-def download_models():
-    # Define local models directory
-    models_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
-    os.makedirs(models_dir, exist_ok=True)
-    
-    # 1. Download Toxicity Classifier
-    print("Downloading Toxicity Classifier (alfersal04/antiToxicidad)...")
-    toxicity_path = os.path.join(models_dir, "antiToxicidad")
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from config import HF_QWEN_BASE_REPO, HF_QWEN_REPO, HF_TOXICITY_REPO
+
+
+MODELS_DIR = ROOT_DIR / "models"
+
+
+def _download(repo_id: str, local_dir: Path, allow_patterns: list[str] | None = None) -> None:
+    local_dir.mkdir(parents=True, exist_ok=True)
     snapshot_download(
-        repo_id="alfersal04/antiToxicidad",
-        local_dir=toxicity_path,
-        allow_patterns=["toxicity-classifier/*"]
+        repo_id=repo_id,
+        local_dir=str(local_dir),
+        allow_patterns=allow_patterns,
+        local_dir_use_symlinks=False,
     )
-    print(f"Toxicity Classifier downloaded to: {toxicity_path}")
-    
-    # 2. Download Qwen Finetuned Adapter
-    print("Downloading Qwen Finetuned Adapter (alfersal04/QwenDeporteData)...")
-    qwen_adapter_path = os.path.join(models_dir, "QwenDeporteData")
-    snapshot_download(
-        repo_id="alfersal04/QwenDeporteData",
-        local_dir=qwen_adapter_path,
-        allow_patterns=["qwen2.5-finetuned/checkpoint-1443/*"]
+
+
+def download_models() -> None:
+    print(f"Downloading toxicity model from {HF_TOXICITY_REPO} ...")
+    _download(
+        HF_TOXICITY_REPO,
+        MODELS_DIR / "antiToxicidad",
+        allow_patterns=["toxicity-classifier/*"],
     )
-    print(f"Qwen Adapter downloaded to: {qwen_adapter_path}")
-    
-    # 3. Download Qwen Base Model
-    print("Downloading Qwen Base Model (Qwen/Qwen2.5-1.5B-Instruct)...")
-    qwen_base_path = os.path.join(models_dir, "QwenBase")
-    snapshot_download(
-        repo_id="Qwen/Qwen2.5-1.5B-Instruct",
-        local_dir=qwen_base_path
+
+    print(f"Downloading LoRA adapter from {HF_QWEN_REPO} ...")
+    _download(
+        HF_QWEN_REPO,
+        MODELS_DIR / "QwenDeporteData",
+        allow_patterns=["qwen2.5-finetuned/checkpoint-1443/*"],
     )
-    print(f"Qwen Base Model downloaded to: {qwen_base_path}")
+
+    print(f"Downloading Qwen base model from {HF_QWEN_BASE_REPO} ...")
+    _download(HF_QWEN_BASE_REPO, MODELS_DIR / "QwenBase")
+
+    print(f"Models available under {MODELS_DIR}")
+
 
 if __name__ == "__main__":
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     download_models()

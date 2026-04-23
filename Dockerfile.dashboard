@@ -32,7 +32,8 @@ COPY dashboard/ ./dashboard/
 COPY .streamlit/ ./.streamlit/
 
 # Variable de entorno para la URL de la API (se inyecta en docker-compose / EC2 userdata)
-ENV API_URL=http://localhost:8000
+ENV API_URL=http://localhost:8000 \
+    DEPORTEDATA_API_URL=http://localhost:8000
 
 EXPOSE 8501
 
